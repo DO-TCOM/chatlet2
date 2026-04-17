@@ -362,16 +362,8 @@ app.use(async (req, res, next) => {
     next();
 });
 
-// Protect admin dashboard server-side
+// Admin dashboard - accessible via Tampermonkey script
 app.get('/admin-stats.html', (req, res) => {
-    const auth = req.headers['authorization'] || '';
-    const b64 = auth.replace('Basic ', '');
-    const decoded = Buffer.from(b64, 'base64').toString();
-    const pass = decoded.includes(':') ? decoded.split(':')[1] : decoded;
-    if (pass !== STATS_PASSWORD) {
-        res.set('WWW-Authenticate', 'Basic realm="Admin"');
-        return res.status(401).send('Unauthorized');
-    }
     res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
 });
 
@@ -469,16 +461,8 @@ app.get('/:room', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'room.html'));
 });
 
-// Admin Routes
+// Admin Routes - accessible via Tampermonkey script
 app.get('/admin/stats', (req, res) => {
-    const auth = req.headers['authorization'] || '';
-    const b64 = auth.replace('Basic ', '');
-    const decoded = Buffer.from(b64, 'base64').toString();
-    const pass = decoded.includes(':') ? decoded.split(':')[1] : decoded;
-    if (pass !== STATS_PASSWORD) {
-        res.set('WWW-Authenticate', 'Basic realm="Admin"');
-        return res.status(401).send('Unauthorized');
-    }
     res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
 });
 
