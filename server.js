@@ -473,6 +473,37 @@ app.get('/api/get-shared-profile', async (req, res) => {
     }
 });
 
+// API to get user profile by IP (for cross-domain requests)
+app.get('/api/get-user-profile', async (req, res) => {
+    const requestedIp = req.query.ip;
+    if (!requestedIp) return res.json({ ok: false });
+    
+    // Set CORS headers for cross-origin requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    try {
+        const extras = await redisGet('extras', {});
+        const userProfile = extras[requestedIp];
+        
+        if (userProfile && (userProfile.url_pseudo || userProfile.url_color)) {
+            res.json({ 
+                ok: true, 
+                profile: { 
+                    pseudo: userProfile.url_pseudo, 
+                    color: userProfile.url_color 
+                } 
+            });
+        } else {
+            res.json({ ok: false });
+        }
+    } catch (error) {
+        console.error('Error getting user profile:', error);
+        res.json({ ok: false });
+    }
+});
+
 // Room profile system - store profile data for room links
 app.post('/api/room-profile', async (req, res) => {
     const { room, pseudo, color } = req.body;
@@ -520,21 +551,40 @@ app.get('/:room', async (req, res) => {
       ? req.headers['x-forwarded-for'].split(',')[0].trim() 
       : req.ip;
   
+  // Check if user is coming from chatlet.com
+  const referer = req.headers.referer || '';
+  if (referer.includes('chatlet.com')) {
+      try {
+          // Try to get profile from chatlet.com via cross-origin request
+          const profileResponse = await fetch(`https://chatlet.com/api/get-user-profile?ip=${encodeURIComponent(realIp)}`, {
+              method: 'GET',
+              headers: {
+                  'Origin': 'https://chaltet.com'
+              }
+          });
+          
+          if (profileResponse.ok) {
+              const profileData = await profileResponse.json();
+              if (profileData.ok && profileData.profile) {
+                  const extras = await redisGet('extras', {});
+                  if (!extras[realIp]) extras[realIp] = {};
+                  extras[realIp].url_pseudo = profileData.profile.pseudo;
+                  extras[realIp].url_color = profileData.profile.color;
+                  await redisSet('extras', extras);
+                  log(`[Profile] Imported profile from chatlet.com for ${realIp}: ${profileData.profile.pseudo}`);
+              }
+          }
+      } catch (error) {
+          log(`[Profile] Could not fetch profile from chatlet.com: ${error.message}`);
+      }
+  }
+  
   try {
       const extras = await redisGet('extras', {});
       if (!extras[realIp]) extras[realIp] = {};
       
-      // First check for shared profile from chatlet.com
-      const sharedProfiles = await redisGet('sharedProfiles', {});
-      const sharedProfile = sharedProfiles[realIp];
-      
-      if (sharedProfile && Date.now() - sharedProfile.timestamp < 10 * 60 * 1000) {
-          // Apply shared profile from chatlet.com
-          extras[realIp].url_pseudo = sharedProfile.pseudo;
-          extras[realIp].url_color = sharedProfile.color;
-          log(`[Profile] Applied shared profile for ${realIp}: ${sharedProfile.pseudo}`);
-      } else {
-          // Check for room-specific profile
+      // Check for room-specific profile if no cross-domain profile
+      if (!extras[realIp].url_pseudo && !extras[realIp].url_color) {
           const roomProfiles = await redisGet('roomProfiles', {});
           if (roomProfiles[room] && roomProfiles[room].profile) {
               extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
