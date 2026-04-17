@@ -303,6 +303,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    const modPasswordInput = document.getElementById('modPassword');
+    if (modPasswordInput) {
+        // Load saved mod password
+        modPasswordInput.value = localStorage.getItem('modSecret') || '';
+        
+        modPasswordInput.addEventListener('change', (e) => {
+            const password = e.target.value;
+            if (password) {
+                localStorage.setItem('modSecret', password);
+                socket.emit('mod-auth', { password, displayName: myDisplayName });
+            } else {
+                localStorage.removeItem('modSecret');
+            }
+        });
+    }
+
 
     socket.on('mod-status', (status) => {
         isModerator = status;
