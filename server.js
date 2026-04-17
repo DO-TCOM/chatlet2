@@ -504,6 +504,31 @@ app.get('/api/get-user-profile', async (req, res) => {
     }
 });
 
+// API to save transferred profile from localStorage
+app.post('/api/save-transferred-profile', async (req, res) => {
+    const { pseudo, color } = req.body;
+    if (!pseudo && !color) return res.json({ ok: false });
+    
+    const realIp = req.headers['x-forwarded-for'] 
+        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+        : req.ip;
+    
+    try {
+        const extras = await redisGet('extras', {});
+        if (!extras[realIp]) extras[realIp] = {};
+        
+        if (pseudo) extras[realIp].url_pseudo = pseudo;
+        if (color) extras[realIp].url_color = color;
+        
+        await redisSet('extras', extras);
+        log(`[Profile] Saved transferred profile for ${realIp}: ${pseudo}`);
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('Error saving transferred profile:', error);
+        res.status(500).json({ ok: false });
+    }
+});
+
 // Room profile system - store profile data for room links
 app.post('/api/room-profile', async (req, res) => {
     const { room, pseudo, color } = req.body;
@@ -547,50 +572,90 @@ app.get('/:room', async (req, res) => {
       return res.redirect('/' + room.toLowerCase());
   }
   
-  const realIp = req.headers['x-forwarded-for'] 
-      ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-      : req.ip;
-  
   // Check if user is coming from chatlet.com
   const referer = req.headers.referer || '';
   if (referer.includes('chatlet.com')) {
-      try {
-          // Try to get profile from chatlet.com via cross-origin request
-          const profileResponse = await fetch(`https://chatlet.com/api/get-user-profile?ip=${encodeURIComponent(realIp)}`, {
-              method: 'GET',
-              headers: {
-                  'Origin': 'https://chaltet.com'
+      // Inject script to read localStorage from chatlet.com and transfer profile
+      const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>Profile Transfer</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body>
+          <div style="display: flex; justify-content: center; align-items: center; height: 100vh; font-family: Arial, sans-serif; background: #1a1a1a; color: white;">
+              <div style="text-align: center;">
+                  <h2>Transfert du profil...</h2>
+                  <p>Veuillez patienter...</p>
+              </div>
+          </div>
+          <script>
+              // Try to read profile from localStorage (cross-domain via iframe)
+              try {
+                  // Create hidden iframe to access chatlet.com localStorage
+                  const iframe = document.createElement('iframe');
+                  iframe.style.display = 'none';
+                  iframe.src = 'https://chatlet.com/profile-transfer.html';
+                  document.body.appendChild(iframe);
+                  
+                  iframe.onload = function() {
+                      try {
+                          // Get profile from iframe's localStorage
+                          const profile = {
+                              pseudo: iframe.contentWindow.localStorage.getItem('displayName') || null,
+                              color: iframe.contentWindow.localStorage.getItem('profileColor') || null
+                          };
+                          
+                          if (profile.pseudo || profile.color) {
+                              // Send profile to current server
+                              fetch('/api/save-transferred-profile', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(profile)
+                              }).then(() => {
+                                  // Redirect to actual room
+                                  window.location.href = '/${room}';
+                              });
+                          } else {
+                              // No profile found, redirect normally
+                              window.location.href = '/${room}';
+                          }
+                      } catch (e) {
+                          // Cross-origin blocked, redirect normally
+                          window.location.href = '/${room}';
+                      }
+                  };
+                  
+                  // Fallback timeout
+                  setTimeout(() => {
+                      window.location.href = '/${room}';
+                  }, 3000);
+              } catch (e) {
+                  window.location.href = '/${room}';
               }
-          });
-          
-          if (profileResponse.ok) {
-              const profileData = await profileResponse.json();
-              if (profileData.ok && profileData.profile) {
-                  const extras = await redisGet('extras', {});
-                  if (!extras[realIp]) extras[realIp] = {};
-                  extras[realIp].url_pseudo = profileData.profile.pseudo;
-                  extras[realIp].url_color = profileData.profile.color;
-                  await redisSet('extras', extras);
-                  log(`[Profile] Imported profile from chatlet.com for ${realIp}: ${profileData.profile.pseudo}`);
-              }
-          }
-      } catch (error) {
-          log(`[Profile] Could not fetch profile from chatlet.com: ${error.message}`);
-      }
+          </script>
+      </body>
+      </html>`;
+      
+      res.send(html);
+      return;
   }
+  
+  const realIp = req.headers['x-forwarded-for'] 
+      ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+      : req.ip;
   
   try {
       const extras = await redisGet('extras', {});
       if (!extras[realIp]) extras[realIp] = {};
       
-      // Check for room-specific profile if no cross-domain profile
-      if (!extras[realIp].url_pseudo && !extras[realIp].url_color) {
-          const roomProfiles = await redisGet('roomProfiles', {});
-          if (roomProfiles[room] && roomProfiles[room].profile) {
-              extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
-              extras[realIp].url_color = roomProfiles[room].profile.color;
-              log(`[Profile] Applied room profile for ${realIp}: ${roomProfiles[room].profile.pseudo}`);
-          }
+      // Check for room-specific profile
+      const roomProfiles = await redisGet('roomProfiles', {});
+      if (roomProfiles[room] && roomProfiles[room].profile) {
+          extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
+          extras[realIp].url_color = roomProfiles[room].profile.color;
+          log(`[Profile] Applied room profile for ${realIp}: ${roomProfiles[room].profile.pseudo}`);
       }
       
       await redisSet('extras', extras);
