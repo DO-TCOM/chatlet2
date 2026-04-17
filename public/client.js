@@ -119,22 +119,26 @@ async function fetchProfileByUUID() {
 }
 
 // Priority: URL params > UUID profile > group profiles > transferred profile > localStorage > random
-let myDisplayName;
-let myProfileColor;
+let myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? findMatchingProfile(groupProfiles) : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
+let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + findMatchingProfile(groupProfiles).color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
 
-(async () => {
-    const uuidProfile = await fetchProfileByUUID();
+localStorage.setItem('displayName', myDisplayName);
+localStorage.setItem('profileColor', myProfileColor);
+
+// Apply UUID profile in background (overrides if found)
+fetchProfileByUUID().then(uuidProfile => {
     if (uuidProfile) {
-        _urlPseudo = uuidProfile.pseudo || _urlPseudo;
-        _urlColor = uuidProfile.color || _urlColor;
+        myDisplayName = uuidProfile.pseudo || myDisplayName;
+        myProfileColor = uuidProfile.color || myProfileColor;
+        localStorage.setItem('displayName', myDisplayName);
+        localStorage.setItem('profileColor', myProfileColor);
+        // Update UI if already rendered
+        const nameInput = document.querySelector('.settings .input');
+        if (nameInput) nameInput.value = myDisplayName;
+        updateLocalProfileUI();
+        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
     }
-    
-    myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? findMatchingProfile(groupProfiles) : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
-    myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + findMatchingProfile(groupProfiles).color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
-    
-    localStorage.setItem('displayName', myDisplayName);
-    localStorage.setItem('profileColor', myProfileColor);
-})();
+});
 
 // Function to find matching profile for current user
 function findMatchingProfile(profiles) {
@@ -300,22 +304,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         soundNotificationsCheckbox.addEventListener('change', (e) => {
             allowSoundNotifications = e.target.checked;
             localStorage.setItem('allowSoundNotifications', allowSoundNotifications);
-        });
-    }
-
-    const modPasswordInput = document.getElementById('modPassword');
-    if (modPasswordInput) {
-        // Load saved mod password
-        modPasswordInput.value = localStorage.getItem('modSecret') || '';
-        
-        modPasswordInput.addEventListener('change', (e) => {
-            const password = e.target.value;
-            if (password) {
-                localStorage.setItem('modSecret', password);
-                socket.emit('mod-auth', { password, displayName: myDisplayName });
-            } else {
-                localStorage.removeItem('modSecret');
-            }
         });
     }
 
