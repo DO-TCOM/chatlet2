@@ -948,13 +948,14 @@ async function createShortLink() {
     }
 }
 
-// Function to share profile for cross-domain access
-async function shareProfile() {
+// Function to create transfer link with token
+async function createTransferLink() {
     const pseudo = myDisplayName;
     const color = myProfileColor.replace('#', '');
+    const currentRoom = window.location.pathname.split('/').pop() || 'friends';
     
     try {
-        const response = await fetch('/api/share-profile', {
+        const response = await fetch('/api/transfer-profile', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -967,10 +968,18 @@ async function shareProfile() {
         
         const result = await response.json();
         if (result.ok) {
-            console.log('Profile shared successfully');
+            // Create link with token
+            const transferLink = `https://chaltet.com/${currentRoom}?profile=${result.token}`;
+            
+            // Copy to clipboard
+            await navigator.clipboard.writeText(transferLink);
+            
+            // Show notification
+            showNotification('Lien de transfert copié !\n' + transferLink);
         }
     } catch (error) {
-        console.error('Error sharing profile:', error);
+        console.error('Error creating transfer link:', error);
+        showNotification('Erreur lors de la création du lien');
     }
 }
 
