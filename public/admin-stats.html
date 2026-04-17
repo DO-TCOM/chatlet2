@@ -575,7 +575,13 @@
             const data = await res.json();
             if (data.ok) {
                 const el = document.getElementById('modal-short-link');
-                el.innerHTML = '<a href="' + data.short + '" target="_blank">' + data.short + '</a> <button onclick="navigator.clipboard.writeText('' + data.short + '')" style="font-size:11px;padding:2px 6px;cursor:pointer;">Copier</button>';
+                el.innerHTML = '<a href="' + data.short + '" target="_blank">' + data.short + '</a> <button id="copyButton" style="font-size:11px;padding:2px 6px;cursor:pointer;">Copier</button>';
+                
+                // Add click event listener to avoid CSP issues
+                const copyBtn = document.getElementById('copyButton');
+                copyBtn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(data.short);
+                });
             }
         }
 
