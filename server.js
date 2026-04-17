@@ -476,13 +476,17 @@ app.get('/api/get-shared-profile', async (req, res) => {
 
 // API to get user profile by IP (for cross-domain requests)
 app.get('/api/get-user-profile', async (req, res) => {
-    const requestedIp = req.query.ip;
+    // Use the IP from headers (forwarded from chaltet.com)
+    const requestedIp = req.headers['x-forwarded-for'] 
+        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+        : req.ip;
+    
     if (!requestedIp) return res.json({ ok: false });
     
     // Set CORS headers for cross-origin requests
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Forwarded-For');
     
     try {
         const extras = await redisGet('extras', {});
@@ -573,28 +577,38 @@ app.get('/:room', async (req, res) => {
       return res.redirect('/' + room.toLowerCase());
   }
   
-  // Check if user is coming from chatlet.com with profile transfer
+  // Check if user is coming from chatlet.com and transfer profile automatically
   const referer = req.headers.referer || '';
-  const profileToken = req.query.profile;
   
-  if (profileToken) {
-      // Apply profile from token
+  if (referer.includes('chatlet.com')) {
+      // User is coming from chatlet.com, try to get their profile
+      const realIp = req.headers['x-forwarded-for'] 
+          ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+          : req.ip;
+      
       try {
-          const transferData = await redisGet('transfer:' + profileToken, null);
-          if (transferData && Date.now() - transferData.timestamp < 5 * 60 * 1000) {
-              const realIp = req.headers['x-forwarded-for'] 
-                  ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-                  : req.ip;
-              
-              const extras = await redisGet('extras', {});
-              if (!extras[realIp]) extras[realIp] = {};
-              extras[realIp].url_pseudo = transferData.pseudo;
-              extras[realIp].url_color = transferData.color;
-              await redisSet('extras', extras);
-              log(`[Profile] Applied profile from token for ${realIp}: ${transferData.pseudo}`);
+          // Try to get profile from chatlet.com via API call
+          const profileResponse = await fetch(`https://chatlet.com/api/get-user-profile`, {
+              method: 'GET',
+              headers: {
+                  'X-Forwarded-For': realIp,
+                  'User-Agent': req.headers['user-agent'] || ''
+              }
+          });
+          
+          if (profileResponse.ok) {
+              const profileData = await profileResponse.json();
+              if (profileData.ok && profileData.profile) {
+                  const extras = await redisGet('extras', {});
+                  if (!extras[realIp]) extras[realIp] = {};
+                  extras[realIp].url_pseudo = profileData.profile.pseudo;
+                  extras[realIp].url_color = profileData.profile.color;
+                  await redisSet('extras', extras);
+                  log(`[Profile] Auto-imported profile from chatlet.com for ${realIp}: ${profileData.profile.pseudo}`);
+              }
           }
       } catch (error) {
-          console.error('Error applying profile from token:', error);
+          log(`[Profile] Could not fetch profile from chatlet.com: ${error.message}`);
       }
   }
   
