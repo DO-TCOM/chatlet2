@@ -476,7 +476,7 @@ app.get('/api/get-shared-profile', async (req, res) => {
 
 // API to get user profile by IP (for cross-domain requests)
 app.get('/api/get-user-profile', async (req, res) => {
-    // Use the IP from headers (forwarded from chaltet.com)
+    // Use the IP from headers (forwarded from chaltet.com) or current IP
     const requestedIp = req.headers['x-forwarded-for'] 
         ? req.headers['x-forwarded-for'].split(',')[0].trim() 
         : req.ip;
