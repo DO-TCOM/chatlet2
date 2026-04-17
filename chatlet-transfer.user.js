@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Chatlet Room Profiles Detection
 // @namespace    http://tampermonkey.net/
-// @version      5.0
-// @description  Detect ALL profiles in room and send to chaltet.com
+// @version      6.0
+// @description  Detect ALL profiles in room and send to chaltet.com using UUID
 // @author       You
 // @match        https://chatlet.com/*
 // @grant        none
@@ -13,6 +13,16 @@
     
     let detectedProfiles = [];
     let isMonitoring = false;
+    
+    // Get or create UUID for this user
+    function getUUID() {
+        let uuid = localStorage.getItem('userUUID');
+        if (!uuid) {
+            uuid = crypto.randomUUID();
+            localStorage.setItem('userUUID', uuid);
+        }
+        return uuid;
+    }
     
     // Function to detect ALL profiles in current room
     function detectAllProfiles() {
@@ -69,22 +79,20 @@
         if (detectedProfiles.length === 0) return;
         
         try {
-            // Get current IP from server
-            const ipResponse = await fetch('https://chaltet.com/api/get-ip');
-            const ipData = await ipResponse.json();
-            const currentIp = ipData.ip;
+            // Get user UUID
+            const uuid = getUUID();
             
-            // Send profiles with IP
+            // Send profiles with UUID
             await fetch('https://chaltet.com/api/store-room-profiles', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     room: currentRoom,
                     profiles: detectedProfiles,
-                    currentIp: currentIp
+                    uuid: uuid
                 })
             });
-            console.log('Profiles sent to server with IP:', currentIp);
+            console.log('Profiles sent to server with UUID:', uuid);
         } catch (e) {
             console.error('Error sending profiles:', e);
         }

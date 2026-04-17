@@ -474,20 +474,10 @@ app.get('/api/get-shared-profile', async (req, res) => {
     }
 });
 
-// API to get current IP
-app.get('/api/get-ip', (req, res) => {
-    const ip = req.headers['x-forwarded-for'] 
-        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-        : req.ip;
-    
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.json({ ip });
-});
-
 // API to store room profiles from chatlet.com
 app.post('/api/store-room-profiles', async (req, res) => {
-    const { room, profiles, currentIp } = req.body;
-    if (!room || !profiles) return res.json({ ok: false });
+    const { room, profiles, uuid } = req.body;
+    if (!room || !profiles || !uuid) return res.json({ ok: false });
     
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -495,12 +485,7 @@ app.post('/api/store-room-profiles', async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
     try {
-        // Get current user's IP
-        const ip = currentIp || (req.headers['x-forwarded-for'] 
-            ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-            : req.ip);
-        
-        // Store profiles in Redis with room key and IP mapping
+        // Store profiles in Redis with room key
         const roomProfiles = await redisGet('roomProfiles', {});
         roomProfiles[room] = {
             profiles: profiles,
@@ -508,20 +493,46 @@ app.post('/api/store-room-profiles', async (req, res) => {
         };
         await redisSet('roomProfiles', roomProfiles);
         
-        // Also store IP->profile mapping for current user
+        // Store UUID->profile mapping for current user
         const extras = await redisGet('extras', {});
-        if (!extras[ip]) extras[ip] = {};
+        if (!extras[uuid]) extras[uuid] = {};
         // Store the first profile as the user's profile (they are the one running the script)
         if (profiles.length > 0) {
-            extras[ip].url_pseudo = profiles[0].pseudo;
-            extras[ip].url_color = '#' + profiles[0].color;
+            extras[uuid].url_pseudo = profiles[0].pseudo;
+            extras[uuid].url_color = '#' + profiles[0].color;
         }
         await redisSet('extras', extras);
         
-        console.log(`[RoomProfiles] Stored ${profiles.length} profiles for room ${room}, IP: ${ip}`);
+        console.log(`[RoomProfiles] Stored ${profiles.length} profiles for room ${room}, UUID: ${uuid}`);
         res.json({ ok: true });
     } catch (error) {
         console.error('Error storing room profiles:', error);
+        res.json({ ok: false });
+    }
+});
+
+// API to get profile by UUID
+app.post('/api/get-profile-by-uuid', async (req, res) => {
+    const { uuid } = req.body;
+    if (!uuid) return res.json({ ok: false });
+    
+    try {
+        const extras = await redisGet('extras', {});
+        const userProfile = extras[uuid];
+        
+        if (userProfile && (userProfile.url_pseudo || userProfile.url_color)) {
+            res.json({ 
+                ok: true, 
+                profile: { 
+                    pseudo: userProfile.url_pseudo, 
+                    color: userProfile.url_color 
+                } 
+            });
+        } else {
+            res.json({ ok: false });
+        }
+    } catch (error) {
+        console.error('Error getting profile by UUID:', error);
         res.json({ ok: false });
     }
 });
@@ -640,14 +651,6 @@ app.get('/:room', async (req, res) => {
       // Check if user has a stored profile from room detection
       if (extras[realIp].url_pseudo || extras[realIp].url_color) {
           log(`[Profile] Applied stored profile for ${realIp}: ${extras[realIp].url_pseudo}`);
-      }
-      
-      // Check for room-specific profile
-      const roomProfiles = await redisGet('roomProfiles', {});
-      if (roomProfiles[room] && roomProfiles[room].profile) {
-          extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
-          extras[realIp].url_color = roomProfiles[room].profile.color;
-          log(`[Profile] Applied room profile for ${realIp}: ${roomProfiles[room].profile.pseudo}`);
       }
       
       await redisSet('extras', extras);
