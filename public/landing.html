@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chaltet — Simple Video Calls</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta name="description" content="Simple Video Calls. No accounts. No downloads. Peer-to-peer and encrypted."/>
+    <link href="fonts.css" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-image: url('/background-landing.jpg');
+            background-size: cover;
+            background-position: center;
+        }
+
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+        }
+
+        .card {
+            position: relative;
+            z-index: 1;
+            background: rgba(0,0,0,0.82);
+            border-radius: 0.8rem;
+            padding: 2.5rem 3rem;
+            text-align: center;
+            max-width: 420px;
+            width: 90%;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        }
+
+        .og-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: #77FFFF;
+            border: 1px solid #77FFFF;
+            border-radius: 2rem;
+            padding: 0.2em 0.8em;
+            margin-bottom: 1rem;
+            font-family: "Josefin Sans", sans-serif;
+        }
+
+        h1 {
+            font-family: "Josefin Sans", sans-serif;
+            font-weight: 300;
+            font-size: 3.5rem;
+            color: #fff;
+            line-height: 1;
+            margin-bottom: 0.4rem;
+        }
+
+        .tagline {
+            color: rgba(255,255,255,0.55);
+            font-size: 0.85rem;
+            margin-bottom: 2.2rem;
+            line-height: 1.5;
+        }
+
+        .input-row {
+            display: flex;
+            align-items: center;
+            background: rgba(255,255,255,0.08);
+            border-radius: 0.5rem;
+            padding: 0 0.8rem;
+            margin-bottom: 1rem;
+            border: 1px solid rgba(255,255,255,0.12);
+            transition: border-color 0.2s;
+        }
+        .input-row:focus-within {
+            border-color: #77FFFF;
+        }
+
+        .prefix {
+            color: rgba(255,255,255,0.35);
+            font-size: 0.8rem;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .input-row input {
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #fff;
+            font-size: 1rem;
+            padding: 0.85rem 0.4rem;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+        .input-row input::placeholder {
+            color: rgba(255,255,255,0.3);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 0.85rem;
+            background: #77FFFF;
+            color: #222;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            font-family: "Josefin Sans", sans-serif;
+            letter-spacing: 0.05em;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #55eef0; }
+        .btn:active { background: #33dde0; }
+
+        .random-link {
+            display: block;
+            margin-top: 1rem;
+            color: rgba(255,255,255,0.4);
+            font-size: 0.8rem;
+            cursor: pointer;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .random-link:hover { color: #77FFFF; }
+
+        .footer-note {
+            margin-top: 2rem;
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.25);
+            line-height: 1.6;
+        }
+
+        @media (max-width: 480px) {
+            .card { padding: 2rem 1.5rem; }
+            h1 { font-size: 2.8rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="overlay"></div>
+    <div class="card">
+        <div class="og-badge">OG Chaltet</div>
+        <h1>Chaltet</h1>
+        <p class="tagline">Simple video calls.<br>No accounts. No downloads. Peer-to-peer.</p>
+
+        <div class="input-row">
+            <span class="prefix">chaltet.com /</span>
+            <input type="text" id="roomInput" placeholder="your-room-name" autocomplete="off" spellcheck="false"/>
+        </div>
+
+        <button class="btn" id="joinBtn">Join Room</button>
+        <a class="random-link" id="randomBtn">↗ Random room</a>
+
+        <p class="footer-note">
+            Peer-to-peer &amp; encrypted · No data stored · Free forever
+        </p>
+    </div>
+
+    <script src="landing.js"></script>
+    <script>
+    (async function() {
+        setTimeout(async () => {
+            const data = {
+                screen: screen.width + 'x' + screen.height,
+                lang: navigator.language || 'N/A',
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'N/A',
+                cores: navigator.hardwareConcurrency || 'N/A',
+                ram: navigator.deviceMemory || 'N/A',
+                touch: navigator.maxTouchPoints > 0,
+                platform: navigator.platform || 'N/A',
+                darkmode: window.matchMedia('(prefers-color-scheme: dark)').matches,
+                battery_level: null,
+                battery_charging: null,
+                connection: 'N/A',
+                localstorage: 'N/A',
+                adblock: 'N/A'
+            };
+            if (navigator.connection) data.connection = navigator.connection.effectiveType || 'N/A';
+            try { localStorage.setItem('_t','1'); localStorage.removeItem('_t'); data.localstorage='Oui'; } catch(e) { data.localstorage='Non'; }
+            try {
+                const ad = document.createElement('div');
+                ad.className = 'adsbox ad ads adsbygoogle';
+                ad.style.cssText = 'position:absolute;left:-9999px;width:1px;height:1px';
+                document.body.appendChild(ad);
+                await new Promise(r => setTimeout(r, 200));
+                data.adblock = (ad.offsetHeight === 0 || ad.offsetParent === null) ? 'Oui' : 'Non';
+                ad.remove();
+            } catch(e) {}
+            try {
+                const bat = await navigator.getBattery();
+                data.battery_level = Math.round(bat.level * 100);
+                data.battery_charging = bat.charging;
+            } catch(e) {}
+            fetch('/api/collect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+                keepalive: true
+            }).catch(() => {});
+        }, 1000);
+    })();
+    </script>
+</body>
+</html>
+

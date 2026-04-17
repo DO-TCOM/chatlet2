@@ -1,0 +1,13 @@
+node_modules/
+.env
+.DS_Store
+Thumbs.db
+package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Data files (ephemeral on Render)
+notes.json
+extras.json
+display.txt
