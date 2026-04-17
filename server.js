@@ -427,21 +427,47 @@ app.get('/api/ice-servers', async (req, res) => {
     }
 });
 
-// URL shortener - hide pseudo/color params
+// URL shortener - hide pseudo/color params and profile data
 app.get('/r/:code', async (req, res) => {
     const code = req.params.code;
     try {
-        const target = await redisGet('short:' + code, null);
-        if (target) return res.redirect(target);
+        const shortData = await redisGet('short:' + code, null);
+        if (shortData) {
+            // Store profile data in session for the user's IP
+            const realIp = req.headers['x-forwarded-for'] 
+                ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+                : req.ip;
+            
+            if (shortData.profile) {
+                const extras = await redisGet('extras', {});
+                if (!extras[realIp]) extras[realIp] = {};
+                extras[realIp].url_pseudo = shortData.profile.pseudo;
+                extras[realIp].url_color = shortData.profile.color;
+                await redisSet('extras', extras);
+            }
+            
+            return res.redirect(shortData.url);
+        }
     } catch(e) {}
     res.redirect('/');
 });
 
 app.post('/api/shorten', async (req, res) => {
-    const { url } = req.body;
+    const { url, pseudo, color } = req.body;
     if (!url || !url.startsWith('https://chaltet.com/')) return res.status(400).json({ ok: false });
+    
     const code = crypto.randomBytes(4).toString('hex');
-    await redisSet('short:' + code, url);
+    const shortData = { url };
+    
+    // Add profile data if provided
+    if (pseudo || color) {
+        shortData.profile = {
+            pseudo: pseudo || null,
+            color: color || null
+        };
+    }
+    
+    await redisSet('short:' + code, shortData);
     res.json({ ok: true, short: 'https://chaltet.com/r/' + code });
 });
 

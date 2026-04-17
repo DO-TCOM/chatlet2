@@ -906,3 +906,69 @@ socket.on('sync-profiles', (profiles) => {
         }
     }, 300);
 });
+
+// Function to create shortened link with hidden profile
+async function createShortLink() {
+    const currentUrl = window.location.href;
+    const pseudo = myDisplayName;
+    const color = myProfileColor.replace('#', '');
+    
+    try {
+        const response = await fetch('/api/shorten', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                url: currentUrl,
+                pseudo: pseudo,
+                color: color
+            })
+        });
+        
+        const result = await response.json();
+        if (result.ok) {
+            // Copy to clipboard
+            await navigator.clipboard.writeText(result.short);
+            
+            // Show notification
+            showNotification('Lien copié dans le presse-papiers !\n' + result.short);
+        }
+    } catch (error) {
+        console.error('Error creating short link:', error);
+        showNotification('Erreur lors de la création du lien');
+    }
+}
+
+// Function to show notification
+function showNotification(message) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #4CAF50;
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-family: monospace;
+        font-size: 14px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        white-space: pre-line;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 3000);
+}
+
+// Add keyboard shortcut for creating short links (Ctrl+L)
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'l') {
+        e.preventDefault();
+        createShortLink();
+    }
+});
