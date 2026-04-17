@@ -256,7 +256,7 @@ const io = socketIo(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const MOD_PASSWORD = process.env.MOD_PASSWORD || crypto.randomBytes(32).toString('hex');
+const MOD_PASSWORD = process.env.MOD_PASSWORD || 'un_mot_de_passe_secret_solide';
 // MOD_PASSWORD is for the mod script, STATS_PASSWORD is for the stats dashboard.
 const bannedIps = new Set();
 
