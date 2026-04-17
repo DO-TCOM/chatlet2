@@ -119,6 +119,9 @@ async function fetchProfileByUUID() {
 }
 
 // Priority: URL params > UUID profile > group profiles > transferred profile > localStorage > random
+let myDisplayName;
+let myProfileColor;
+
 (async () => {
     const uuidProfile = await fetchProfileByUUID();
     if (uuidProfile) {
@@ -148,9 +151,6 @@ function findMatchingProfile(profiles) {
     return profiles[0];
 }
 let allowSoundNotifications = localStorage.getItem('allowSoundNotifications') !== 'false';
-
-localStorage.setItem('displayName', myDisplayName);
-localStorage.setItem('profileColor', myProfileColor);
 
 // UI Elements
 const welcomeLayer = document.querySelector('.welcome');
