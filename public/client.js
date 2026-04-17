@@ -28,7 +28,11 @@ socket.on('reconnect', () => {
     if (roomId) {
         socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
         socket.emit('join-room', roomId);
+        // Share profile for cross-domain access
+        shareProfile();
     }
+    // Share profile for cross-domain access
+    shareProfile();
     if (isModerator) {
         setTimeout(() => socket.emit('mod-badge', { roomId }), 600);
     }
@@ -418,6 +422,9 @@ async function start(useVideo, useAudio) {
     if (_urlPseudo || _urlColor) {
         socket.emit('url-identity', { pseudo: _urlPseudo, color: _urlColor });
     }
+
+    // Share profile for cross-domain access
+    shareProfile();
 
     // Auto-mod if secret stored in localStorage
     const modSecret = localStorage.getItem('modSecret');
@@ -941,35 +948,29 @@ async function createShortLink() {
     }
 }
 
-// Function to create cross-domain profile transfer link
-async function createTransferLink(targetDomain = 'chaltet.com') {
+// Function to share profile for cross-domain access
+async function shareProfile() {
     const pseudo = myDisplayName;
     const color = myProfileColor.replace('#', '');
     
     try {
-        const response = await fetch('/api/transfer-profile', {
+        const response = await fetch('/api/share-profile', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
                 pseudo: pseudo,
-                color: color,
-                targetDomain: targetDomain
+                color: color
             })
         });
         
         const result = await response.json();
         if (result.ok) {
-            // Copy transfer link to clipboard
-            await navigator.clipboard.writeText(result.transferUrl);
-            
-            // Show notification
-            showNotification('Lien de transfert copié !\n' + result.transferUrl + '\n\nLe profil sera transféré vers ' + targetDomain);
+            console.log('Profile shared successfully');
         }
     } catch (error) {
-        console.error('Error creating transfer link:', error);
-        showNotification('Erreur lors de la création du lien de transfert');
+        console.error('Error sharing profile:', error);
     }
 }
 

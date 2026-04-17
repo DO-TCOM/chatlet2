@@ -427,64 +427,49 @@ app.get('/api/ice-servers', async (req, res) => {
     }
 });
 
-// Cross-domain profile transfer system
-app.post('/api/transfer-profile', async (req, res) => {
-    const { pseudo, color, targetDomain } = req.body;
-    if (!pseudo || !color || !targetDomain) return res.status(400).json({ ok: false });
+// Cross-domain profile sharing system
+app.post('/api/share-profile', async (req, res) => {
+    const { pseudo, color } = req.body;
+    if (!pseudo || !color) return res.status(400).json({ ok: false });
     
-    // Generate temporary token for profile transfer
-    const token = crypto.randomBytes(16).toString('hex');
-    const profileData = {
-        pseudo: pseudo,
-        color: color,
-        timestamp: Date.now(),
-        targetDomain: targetDomain
-    };
+    const realIp = req.headers['x-forwarded-for'] 
+        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+        : req.ip;
     
     try {
-        // Store with 5-minute expiration
-        await redisSet('transfer:' + token, profileData);
-        res.json({ 
-            ok: true, 
-            transferUrl: `https://${targetDomain}/transfer/${token}`
-        });
+        // Store profile with IP as key for cross-domain access
+        const sharedProfiles = await redisGet('sharedProfiles', {});
+        sharedProfiles[realIp] = {
+            pseudo: pseudo,
+            color: color,
+            timestamp: Date.now()
+        };
+        await redisSet('sharedProfiles', sharedProfiles);
+        res.json({ ok: true });
     } catch (error) {
-        console.error('Error creating transfer token:', error);
+        console.error('Error sharing profile:', error);
         res.status(500).json({ ok: false });
     }
 });
 
-// Handle incoming profile transfers
-app.get('/transfer/:token', async (req, res) => {
-    const token = req.params.token;
+// Get shared profile for cross-domain access
+app.get('/api/get-shared-profile', async (req, res) => {
+    const realIp = req.headers['x-forwarded-for'] 
+        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+        : req.ip;
     
     try {
-        const transferData = await redisGet('transfer:' + token, null);
-        if (!transferData) {
-            return res.redirect('/');
+        const sharedProfiles = await redisGet('sharedProfiles', {});
+        const profile = sharedProfiles[realIp];
+        
+        if (profile && Date.now() - profile.timestamp < 10 * 60 * 1000) { // 10 minutes
+            res.json({ ok: true, profile: { pseudo: profile.pseudo, color: profile.color } });
+        } else {
+            res.json({ ok: false });
         }
-        
-        // Check if token is not too old (5 minutes)
-        if (Date.now() - transferData.timestamp > 5 * 60 * 1000) {
-            return res.redirect('/');
-        }
-        
-        // Store profile data for this IP
-        const realIp = req.headers['x-forwarded-for'] 
-            ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-            : req.ip;
-        
-        const extras = await redisGet('extras', {});
-        if (!extras[realIp]) extras[realIp] = {};
-        extras[realIp].url_pseudo = transferData.pseudo;
-        extras[realIp].url_color = transferData.color;
-        await redisSet('extras', extras);
-        
-        // Redirect to main page
-        res.redirect('/');
     } catch (error) {
-        console.error('Error processing transfer:', error);
-        res.redirect('/');
+        console.error('Error getting shared profile:', error);
+        res.json({ ok: false });
     }
 });
 
@@ -531,22 +516,36 @@ app.get('/:room', async (req, res) => {
       return res.redirect('/' + room.toLowerCase());
   }
   
-  // Check if room has stored profile data and apply it for this IP
   const realIp = req.headers['x-forwarded-for'] 
       ? req.headers['x-forwarded-for'].split(',')[0].trim() 
       : req.ip;
   
   try {
-      const roomProfiles = await redisGet('roomProfiles', {});
-      if (roomProfiles[room] && roomProfiles[room].profile) {
-          const extras = await redisGet('extras', {});
-          if (!extras[realIp]) extras[realIp] = {};
-          extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
-          extras[realIp].url_color = roomProfiles[room].profile.color;
-          await redisSet('extras', extras);
+      const extras = await redisGet('extras', {});
+      if (!extras[realIp]) extras[realIp] = {};
+      
+      // First check for shared profile from chatlet.com
+      const sharedProfiles = await redisGet('sharedProfiles', {});
+      const sharedProfile = sharedProfiles[realIp];
+      
+      if (sharedProfile && Date.now() - sharedProfile.timestamp < 10 * 60 * 1000) {
+          // Apply shared profile from chatlet.com
+          extras[realIp].url_pseudo = sharedProfile.pseudo;
+          extras[realIp].url_color = sharedProfile.color;
+          log(`[Profile] Applied shared profile for ${realIp}: ${sharedProfile.pseudo}`);
+      } else {
+          // Check for room-specific profile
+          const roomProfiles = await redisGet('roomProfiles', {});
+          if (roomProfiles[room] && roomProfiles[room].profile) {
+              extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
+              extras[realIp].url_color = roomProfiles[room].profile.color;
+              log(`[Profile] Applied room profile for ${realIp}: ${roomProfiles[room].profile.pseudo}`);
+          }
       }
+      
+      await redisSet('extras', extras);
   } catch (error) {
-      console.error('Error applying room profile:', error);
+      console.error('Error applying profile:', error);
   }
   
   res.sendFile(path.join(__dirname, 'public', 'room.html'));
