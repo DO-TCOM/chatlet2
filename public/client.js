@@ -72,9 +72,26 @@ try {
     console.error('Error reading transferred profile:', e);
 }
 
-// Priority: URL params > transferred profile > localStorage > random
-let myDisplayName = _urlPseudo || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
-let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
+// Check for group transferred profiles
+let groupProfiles = null;
+try {
+    const groupStored = localStorage.getItem('transferProfile');
+    if (groupStored) {
+        const groupData = JSON.parse(groupStored);
+        // Check if group data is less than 5 minutes old
+        if (Date.now() - groupData.timestamp < 5 * 60 * 1000 && groupData.profiles) {
+            groupProfiles = groupData.profiles;
+            // Clear after use
+            localStorage.removeItem('transferProfile');
+        }
+    }
+} catch (e) {
+    console.error('Error reading group profiles:', e);
+}
+
+// Priority: URL params > group profiles > transferred profile > localStorage > random
+let myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? groupProfiles[0].pseudo : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
+let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + groupProfiles[0].color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
 let allowSoundNotifications = localStorage.getItem('allowSoundNotifications') !== 'false';
 
 localStorage.setItem('displayName', myDisplayName);
