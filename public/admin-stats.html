@@ -331,39 +331,10 @@
         let showExtras = false;
         let lastData = null;
 
-        // Check for Tampermonkey token in header (via server-side injection)
-        // The server will inject the token status if present
-        let hasTampermonkeyToken = false;
-        
-        // Try to detect if we have admin access via Tampermonkey
-        fetch('/admin/check-token', { method: 'GET' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.hasToken) {
-                    hasTampermonkeyToken = true;
-                    document.getElementById('loginOverlay').style.display = 'none';
-                    document.getElementById('dashboard').style.display = 'block';
-                    loadData();
-                } else if (sessionToken) {
-                    document.getElementById('loginOverlay').style.display = 'none';
-                    document.getElementById('dashboard').style.display = 'block';
-                    loadData();
-                }
-            })
-            .catch(() => {
-                // Fallback to sessionStorage check
-                if (sessionToken) {
-                    document.getElementById('loginOverlay').style.display = 'none';
-                    document.getElementById('dashboard').style.display = 'block';
-                    loadData();
-                }
-            });
-
-        if (sessionToken) {
-            document.getElementById('loginOverlay').style.display = 'none';
-            document.getElementById('dashboard').style.display = 'block';
-            loadData();
-        }
+        // Remove all login checks - direct access
+        document.getElementById('loginOverlay').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
+        loadData();
 
         async function login() {
             const pass = document.getElementById('passInput').value;

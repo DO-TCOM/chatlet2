@@ -1019,10 +1019,6 @@ function showNotification(message) {
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'l') {
         e.preventDefault();
-        createShortLink();
-    }
-    if (e.ctrlKey && e.key === 't') {
-        e.preventDefault();
-        createTransferLink();
+        createTransferLink(); // Changed to transfer link
     }
 });
