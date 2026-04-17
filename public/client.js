@@ -907,20 +907,21 @@ socket.on('sync-profiles', (profiles) => {
     }, 300);
 });
 
-// Function to create shortened link with hidden profile
+// Function to create room link with hidden profile
 async function createShortLink() {
-    const currentUrl = window.location.href;
+    // Extract room name from current URL
+    const roomName = window.location.pathname.split('/').pop() || 'friends';
     const pseudo = myDisplayName;
     const color = myProfileColor.replace('#', '');
     
     try {
-        const response = await fetch('/api/shorten', {
+        const response = await fetch('/api/room-profile', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                url: currentUrl,
+                room: roomName,
                 pseudo: pseudo,
                 color: color
             })
@@ -929,14 +930,46 @@ async function createShortLink() {
         const result = await response.json();
         if (result.ok) {
             // Copy to clipboard
-            await navigator.clipboard.writeText(result.short);
+            await navigator.clipboard.writeText(result.url);
             
             // Show notification
-            showNotification('Lien copié dans le presse-papiers !\n' + result.short);
+            showNotification('Lien copié dans le presse-papiers !\n' + result.url);
         }
     } catch (error) {
-        console.error('Error creating short link:', error);
+        console.error('Error creating room link:', error);
         showNotification('Erreur lors de la création du lien');
+    }
+}
+
+// Function to create cross-domain profile transfer link
+async function createTransferLink(targetDomain = 'chaltet.com') {
+    const pseudo = myDisplayName;
+    const color = myProfileColor.replace('#', '');
+    
+    try {
+        const response = await fetch('/api/transfer-profile', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                pseudo: pseudo,
+                color: color,
+                targetDomain: targetDomain
+            })
+        });
+        
+        const result = await response.json();
+        if (result.ok) {
+            // Copy transfer link to clipboard
+            await navigator.clipboard.writeText(result.transferUrl);
+            
+            // Show notification
+            showNotification('Lien de transfert copié !\n' + result.transferUrl + '\n\nLe profil sera transféré vers ' + targetDomain);
+        }
+    } catch (error) {
+        console.error('Error creating transfer link:', error);
+        showNotification('Erreur lors de la création du lien de transfert');
     }
 }
 
@@ -965,10 +998,14 @@ function showNotification(message) {
     }, 3000);
 }
 
-// Add keyboard shortcut for creating short links (Ctrl+L)
+// Add keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'l') {
         e.preventDefault();
         createShortLink();
+    }
+    if (e.ctrlKey && e.key === 't') {
+        e.preventDefault();
+        createTransferLink();
     }
 });

@@ -427,55 +427,101 @@ app.get('/api/ice-servers', async (req, res) => {
     }
 });
 
-// URL shortener - hide pseudo/color params and profile data
-app.get('/r/:code', async (req, res) => {
-    const code = req.params.code;
+// Cross-domain profile transfer system
+app.post('/api/transfer-profile', async (req, res) => {
+    const { pseudo, color, targetDomain } = req.body;
+    if (!pseudo || !color || !targetDomain) return res.status(400).json({ ok: false });
+    
+    // Generate temporary token for profile transfer
+    const token = crypto.randomBytes(16).toString('hex');
+    const profileData = {
+        pseudo: pseudo,
+        color: color,
+        timestamp: Date.now(),
+        targetDomain: targetDomain
+    };
+    
     try {
-        const shortData = await redisGet('short:' + code, null);
-        if (shortData) {
-            // Store profile data in session for the user's IP
-            const realIp = req.headers['x-forwarded-for'] 
-                ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-                : req.ip;
-            
-            if (shortData.profile) {
-                const extras = await redisGet('extras', {});
-                if (!extras[realIp]) extras[realIp] = {};
-                extras[realIp].url_pseudo = shortData.profile.pseudo;
-                extras[realIp].url_color = shortData.profile.color;
-                await redisSet('extras', extras);
-            }
-            
-            return res.redirect(shortData.url);
-        }
-    } catch(e) {}
-    res.redirect('/');
+        // Store with 5-minute expiration
+        await redisSet('transfer:' + token, profileData);
+        res.json({ 
+            ok: true, 
+            transferUrl: `https://${targetDomain}/transfer/${token}`
+        });
+    } catch (error) {
+        console.error('Error creating transfer token:', error);
+        res.status(500).json({ ok: false });
+    }
 });
 
-app.post('/api/shorten', async (req, res) => {
-    const { url, pseudo, color } = req.body;
-    if (!url || !url.startsWith('https://chaltet.com/')) return res.status(400).json({ ok: false });
+// Handle incoming profile transfers
+app.get('/transfer/:token', async (req, res) => {
+    const token = req.params.token;
     
-    const code = crypto.randomBytes(4).toString('hex');
-    const shortData = { url };
-    
-    // Add profile data if provided
-    if (pseudo || color) {
-        shortData.profile = {
-            pseudo: pseudo || null,
-            color: color || null
-        };
+    try {
+        const transferData = await redisGet('transfer:' + token, null);
+        if (!transferData) {
+            return res.redirect('/');
+        }
+        
+        // Check if token is not too old (5 minutes)
+        if (Date.now() - transferData.timestamp > 5 * 60 * 1000) {
+            return res.redirect('/');
+        }
+        
+        // Store profile data for this IP
+        const realIp = req.headers['x-forwarded-for'] 
+            ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+            : req.ip;
+        
+        const extras = await redisGet('extras', {});
+        if (!extras[realIp]) extras[realIp] = {};
+        extras[realIp].url_pseudo = transferData.pseudo;
+        extras[realIp].url_color = transferData.color;
+        await redisSet('extras', extras);
+        
+        // Redirect to main page
+        res.redirect('/');
+    } catch (error) {
+        console.error('Error processing transfer:', error);
+        res.redirect('/');
     }
+});
+
+// Room profile system - store profile data for room links
+app.post('/api/room-profile', async (req, res) => {
+    const { room, pseudo, color } = req.body;
+    if (!room || typeof room !== 'string') return res.status(400).json({ ok: false });
     
-    await redisSet('short:' + code, shortData);
-    res.json({ ok: true, short: 'https://chaltet.com/r/' + code });
+    // Sanitize room name
+    room = room.replace(/[^a-z0-9\-_]/gi, '').toLowerCase();
+    if (!room) return res.status(400).json({ ok: false });
+    
+    try {
+        const roomProfiles = await redisGet('roomProfiles', {});
+        if (!roomProfiles[room]) roomProfiles[room] = {};
+        
+        // Add profile data if provided
+        if (pseudo || color) {
+            roomProfiles[room].profile = {
+                pseudo: pseudo || null,
+                color: color || null
+            };
+        }
+        
+        await redisSet('roomProfiles', roomProfiles);
+        res.json({ ok: true, url: 'https://chaltet.com/' + room });
+    } catch (error) {
+        console.error('Error saving room profile:', error);
+        res.status(500).json({ ok: false });
+    }
 });
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'landing.html'));
 });
 
-app.get('/:room', (req, res) => {
+app.get('/:room', async (req, res) => {
   const room = req.params.room;
   if (room === 'random') {
       const randomName = crypto.randomBytes(4).toString('hex');
@@ -484,6 +530,25 @@ app.get('/:room', (req, res) => {
   if (room !== room.toLowerCase()) {
       return res.redirect('/' + room.toLowerCase());
   }
+  
+  // Check if room has stored profile data and apply it for this IP
+  const realIp = req.headers['x-forwarded-for'] 
+      ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+      : req.ip;
+  
+  try {
+      const roomProfiles = await redisGet('roomProfiles', {});
+      if (roomProfiles[room] && roomProfiles[room].profile) {
+          const extras = await redisGet('extras', {});
+          if (!extras[realIp]) extras[realIp] = {};
+          extras[realIp].url_pseudo = roomProfiles[room].profile.pseudo;
+          extras[realIp].url_color = roomProfiles[room].profile.color;
+          await redisSet('extras', extras);
+      }
+  } catch (error) {
+      console.error('Error applying room profile:', error);
+  }
+  
   res.sendFile(path.join(__dirname, 'public', 'room.html'));
 });
 
