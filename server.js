@@ -903,16 +903,27 @@ io.on('connection', (socket) => {
     const realIp = socket.handshake.headers['x-forwarded-for']
         ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
         : socket.handshake.address;
-    // Also update pseudo in extras.json
+    
+    // Save profile for cross-domain transfer
     (async () => {
         try {
             const extras = await redisGet('extras', {});
-            if (extras[realIp]) {
-                const existing = extras[realIp].pseudos ? extras[realIp].pseudos.split(', ') : [];
-                if (!existing.includes(data.displayName)) existing.push(data.displayName);
-                extras[realIp].pseudos = existing.join(', ');
-                await redisSet('extras', extras);
-            }
+            if (!extras[realIp]) extras[realIp] = {};
+            
+            // Store current profile for cross-domain transfer
+            extras[realIp].url_pseudo = data.displayName;
+            extras[realIp].url_color = data.profileColor;
+            extras[realIp].current_pseudo = data.displayName;
+            extras[realIp].current_color = data.profileColor;
+            
+            // Store pseudos history
+            if (!extras[realIp].pseudos) extras[realIp].pseudos = '';
+            const existing = extras[realIp].pseudos.split(', ').filter(Boolean);
+            if (!existing.includes(data.displayName)) existing.push(data.displayName);
+            extras[realIp].pseudos = existing.join(', ');
+            
+            await redisSet('extras', extras);
+            log(`[Profile] Saved profile for cross-domain transfer: ${data.displayName} (${realIp})`);
         } catch(e) {}
     })();
     (async () => {
@@ -1086,37 +1097,6 @@ io.on('connection', (socket) => {
     if (targetSocket) targetSocket.data.isMuted = false;
     io.to(targetId).emit('mod-action', { type: 'unmuted', by: 'OvO' });
     log(`[Socket] Moderator ${socket.id} unmuted ${targetId}`);
-  });
-
-  socket.on('url-identity', async (data) => {
-    if (!data || !data.pseudo) return;
-    const realIp = socket.handshake.headers['x-forwarded-for']
-        ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
-        : socket.handshake.address;
-    try {
-        const extras = await redisGet('extras', {});
-        if (!extras[realIp]) extras[realIp] = {};
-        const existing = extras[realIp].pseudos ? extras[realIp].pseudos.split(', ') : [];
-        if (!existing.includes(data.pseudo)) existing.push(data.pseudo);
-        extras[realIp].pseudos = [...new Set(existing)].join(', ');
-        extras[realIp].url_pseudo = data.pseudo;
-        if (data.color) extras[realIp].url_color = data.color;
-        await redisSet('extras', extras);
-    } catch(e) {}
-  });
-
-  socket.on('mod-badge', (data) => {
-    const actualRoom = socket.data.roomId;
-    if (!actualRoom || !socket.data.isMod) return;
-    socket.to(actualRoom).emit('mod-badge', { id: socket.id });
-  });
-
-  socket.on('disconnect', () => {
-    const roomId = socket.data.roomId;
-    if (roomId) {
-      log(`[Socket] User ${socket.id} disconnected from room: ${roomId}`);
-      socket.to(roomId).emit('user-disconnected', socket.id);
-    }
   });
 });
 
