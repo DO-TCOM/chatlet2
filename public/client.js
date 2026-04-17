@@ -55,8 +55,26 @@ const _urlParams = new URLSearchParams(window.location.search);
 const _urlPseudo = _urlParams.get('pseudo');
 const _urlColor = _urlParams.get('color') ? '#' + _urlParams.get('color') : null;
 
-let myDisplayName = _urlPseudo || localStorage.getItem('displayName') || generateRandomName();
-let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
+// Check for transferred profile from localStorage (cross-domain)
+let transferredProfile = null;
+try {
+    const stored = localStorage.getItem('transferProfile');
+    if (stored) {
+        const profile = JSON.parse(stored);
+        // Check if profile is less than 5 minutes old
+        if (Date.now() - profile.timestamp < 5 * 60 * 1000) {
+            transferredProfile = profile;
+            // Clear after use
+            localStorage.removeItem('transferProfile');
+        }
+    }
+} catch (e) {
+    console.error('Error reading transferred profile:', e);
+}
+
+// Priority: URL params > transferred profile > localStorage > random
+let myDisplayName = _urlPseudo || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
+let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
 let allowSoundNotifications = localStorage.getItem('allowSoundNotifications') !== 'false';
 
 localStorage.setItem('displayName', myDisplayName);
@@ -948,39 +966,27 @@ async function createShortLink() {
     }
 }
 
-// Function to create transfer link with token
+// Function to create transfer link using localStorage
 async function createTransferLink() {
     const pseudo = myDisplayName;
     const color = myProfileColor.replace('#', '');
     const currentRoom = window.location.pathname.split('/').pop() || 'friends';
     
-    try {
-        const response = await fetch('/api/transfer-profile', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                pseudo: pseudo,
-                color: color
-            })
-        });
-        
-        const result = await response.json();
-        if (result.ok) {
-            // Create link with token
-            const transferLink = `https://chaltet.com/${currentRoom}?profile=${result.token}`;
-            
-            // Copy to clipboard
-            await navigator.clipboard.writeText(transferLink);
-            
-            // Show notification
-            showNotification('Lien de transfert copié !\n' + transferLink);
-        }
-    } catch (error) {
-        console.error('Error creating transfer link:', error);
-        showNotification('Erreur lors de la création du lien');
-    }
+    // Store profile in localStorage for cross-domain transfer
+    localStorage.setItem('transferProfile', JSON.stringify({
+        pseudo: pseudo,
+        color: color,
+        timestamp: Date.now()
+    }));
+    
+    // Create clean link
+    const transferLink = `https://chaltet.com/${currentRoom}`;
+    
+    // Copy to clipboard
+    await navigator.clipboard.writeText(transferLink);
+    
+    // Show notification
+    showNotification('Lien copié !\n' + transferLink + '\n\nLe profil sera transféré automatiquement.');
 }
 
 // Function to show notification

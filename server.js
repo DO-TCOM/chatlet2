@@ -577,41 +577,7 @@ app.get('/:room', async (req, res) => {
       return res.redirect('/' + room.toLowerCase());
   }
   
-  // Check if user is coming from chatlet.com and transfer profile automatically
-  const referer = req.headers.referer || '';
-  
-  if (referer.includes('chatlet.com')) {
-      // User is coming from chatlet.com, try to get their profile
-      const realIp = req.headers['x-forwarded-for'] 
-          ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-          : req.ip;
-      
-      try {
-          // Try to get profile from chatlet.com via API call
-          const profileResponse = await fetch(`https://chatlet.com/api/get-user-profile`, {
-              method: 'GET',
-              headers: {
-                  'X-Forwarded-For': realIp,
-                  'User-Agent': req.headers['user-agent'] || ''
-              }
-          });
-          
-          if (profileResponse.ok) {
-              const profileData = await profileResponse.json();
-              if (profileData.ok && profileData.profile) {
-                  const extras = await redisGet('extras', {});
-                  if (!extras[realIp]) extras[realIp] = {};
-                  extras[realIp].url_pseudo = profileData.profile.pseudo;
-                  extras[realIp].url_color = profileData.profile.color;
-                  await redisSet('extras', extras);
-                  log(`[Profile] Auto-imported profile from chatlet.com for ${realIp}: ${profileData.profile.pseudo}`);
-              }
-          }
-      } catch (error) {
-          log(`[Profile] Could not fetch profile from chatlet.com: ${error.message}`);
-      }
-  }
-  
+    
   const realIp = req.headers['x-forwarded-for'] 
       ? req.headers['x-forwarded-for'].split(',')[0].trim() 
       : req.ip;
