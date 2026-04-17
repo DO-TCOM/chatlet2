@@ -104,12 +104,90 @@ async function fetchProfileByUUID() {
     return null;
 }
 
-// Priority: URL params > UUID profile > group profiles > transferred profile > localStorage > random
+// ─── Chargement des profils depuis la room chatlet ───────────────────────────
+// Quand quelqu'un clique un lien chaltet.com/room, on récupère la liste des
+// profils stockés par le script Tampermonkey et on lui propose de choisir le sien.
+async function loadRoomProfilesAndPickOne() {
+    const room = window.location.pathname.replace(/^\//, '').split('/')[0];
+    if (!room || room === '') return;
+    try {
+        const res = await fetch('/api/room-profiles/' + room);
+        const data = await res.json();
+        if (!data.ok || !data.profiles || data.profiles.length === 0) return;
+
+        // Si un seul profil → l'appliquer directement sans demander
+        if (data.profiles.length === 1) {
+            applyRoomProfile(data.profiles[0]);
+            return;
+        }
+
+        // Plusieurs profils → afficher un sélecteur
+        showProfilePicker(data.profiles);
+    } catch (e) {}
+}
+
+function applyRoomProfile(profile) {
+    if (!profile || !profile.pseudo) return;
+    myDisplayName = profile.pseudo;
+    myProfileColor = profile.color ? '#' + profile.color : myProfileColor;
+    localStorage.setItem('displayName', myDisplayName);
+    localStorage.setItem('profileColor', myProfileColor);
+    const nameInput = document.querySelector('.settings .input');
+    if (nameInput) nameInput.value = myDisplayName;
+    if (typeof updateLocalProfileUI === 'function') updateLocalProfileUI();
+    // Réémettre le profil si déjà connecté
+    if (typeof socket !== 'undefined' && socket.connected) {
+        socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
+    }
+}
+
+function showProfilePicker(profiles) {
+    // Ne pas afficher si l'utilisateur a déjà un profil dans ce localStorage
+    const existing = localStorage.getItem('displayName');
+    if (existing && profiles.find(p => p.pseudo === existing)) {
+        applyRoomProfile(profiles.find(p => p.pseudo === existing));
+        return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'profile-picker-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
+    box.innerHTML = '<p style="font-weight:600;font-size:15px;margin:0 0 14px;color:#222;">Qui es-tu ?</p>';
+
+    profiles.forEach(profile => {
+        const btn = document.createElement('button');
+        const col = '#' + profile.color;
+        btn.style.cssText = `display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;margin-bottom:8px;border:1.5px solid ${col};border-radius:10px;background:#fff;cursor:pointer;font-size:14px;color:#222;`;
+        btn.innerHTML = `<span style="width:18px;height:18px;border-radius:50%;background:${col};flex-shrink:0;"></span><span>${escapeHTML(profile.pseudo)}</span>`;
+        btn.onclick = () => {
+            applyRoomProfile(profile);
+            document.body.removeChild(overlay);
+        };
+        box.appendChild(btn);
+    });
+
+    const skip = document.createElement('button');
+    skip.style.cssText = 'width:100%;padding:8px;margin-top:4px;border:none;background:none;color:#888;font-size:13px;cursor:pointer;';
+    skip.textContent = 'Continuer avec un pseudo aléatoire';
+    skip.onclick = () => document.body.removeChild(overlay);
+    box.appendChild(skip);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+}
+
+// Priority: URL params > room profiles > transferred profile > localStorage > random
 let myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? findMatchingProfile(groupProfiles) : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
 let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + findMatchingProfile(groupProfiles).color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
 
 localStorage.setItem('displayName', myDisplayName);
 localStorage.setItem('profileColor', myProfileColor);
+
+// Charge les profils de la room en arrière-plan et propose le sélecteur si besoin
+loadRoomProfilesAndPickOne();
 
 // Apply UUID profile in background (overrides if found)
 fetchProfileByUUID().then(uuidProfile => {

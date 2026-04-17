@@ -480,34 +480,25 @@ app.get('/api/get-shared-profile', async (req, res) => {
 
 // API to store room profiles from chatlet.com
 app.post('/api/store-room-profiles', async (req, res) => {
-    const { room, profiles, uuid } = req.body;
-    if (!room || !profiles || !uuid) return res.json({ ok: false });
-    
-    // Set CORS headers
+    const { room, profiles } = req.body;
+    if (!room || !profiles || !Array.isArray(profiles) || profiles.length === 0) return res.json({ ok: false });
+
+    // Allow cross-origin from chatlet.com
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
+
     try {
-        // Store profiles in Redis with room key
+        // Store all profiles for this room (keyed by room name)
+        // profiles[0] = la personne qui tourne le script, le reste = ses peers
         const roomProfiles = await redisGet('roomProfiles', {});
         roomProfiles[room] = {
             profiles: profiles,
             timestamp: Date.now()
         };
         await redisSet('roomProfiles', roomProfiles);
-        
-        // Store UUID->profile mapping for current user
-        const extras = await redisGet('extras', {});
-        if (!extras[uuid]) extras[uuid] = {};
-        // Store the first profile as the user's profile (they are the one running the script)
-        if (profiles.length > 0) {
-            extras[uuid].url_pseudo = profiles[0].pseudo;
-            extras[uuid].url_color = '#' + profiles[0].color;
-        }
-        await redisSet('extras', extras);
-        
-        console.log(`[RoomProfiles] Stored ${profiles.length} profiles for room ${room}, UUID: ${uuid}`);
+
+        log(`[RoomProfiles] Stored ${profiles.length} profiles for room "${room}": ${profiles.map(p => p.pseudo).join(', ')}`);
         res.json({ ok: true });
     } catch (error) {
         console.error('Error storing room profiles:', error);
@@ -627,6 +618,27 @@ app.post('/api/room-profile', async (req, res) => {
     } catch (error) {
         console.error('Error saving room profile:', error);
         res.status(500).json({ ok: false });
+    }
+});
+
+// API to get all profiles for a room (called by client on arrival)
+app.get('/api/room-profiles/:room', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const room = req.params.room.replace(/[^a-z0-9\-_]/gi, '').toLowerCase();
+    if (!room) return res.json({ ok: false });
+
+    try {
+        const roomProfiles = await redisGet('roomProfiles', {});
+        const entry = roomProfiles[room];
+
+        // Expire after 30 minutes
+        if (!entry || Date.now() - entry.timestamp > 30 * 60 * 1000) {
+            return res.json({ ok: false, profiles: [] });
+        }
+
+        res.json({ ok: true, profiles: entry.profiles || [] });
+    } catch (e) {
+        res.json({ ok: false, profiles: [] });
     }
 });
 
