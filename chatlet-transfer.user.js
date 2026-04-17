@@ -89,19 +89,26 @@
             return;
         }
         
-        // Store ALL profiles in transferProfile
-        localStorage.setItem('transferProfile', JSON.stringify({
+        // Store ALL profiles in transferProfile with room info
+        const transferData = {
             profiles: detectedProfiles,
             room: currentRoom,
             timestamp: Date.now()
-        }));
+        };
         
-        // Generate and copy the transfer link
+        // Store in localStorage with room key for persistence
+        const roomKey = `roomProfiles_${currentRoom}`;
+        localStorage.setItem(roomKey, JSON.stringify(transferData));
+        
+        // Also store in transferProfile for cross-domain access
+        localStorage.setItem('transferProfile', JSON.stringify(transferData));
+        
+        // Generate and copy of transfer link
         const transferLink = `https://chaltet.com/${currentRoom}`;
         
         // Copy to clipboard
         navigator.clipboard.writeText(transferLink).then(() => {
-            showNotification(`TOUS les profils transférés !\n${detectedProfiles.length} utilisateur(s) détecté(s)\nLien: ${transferLink}`);
+            showNotification(`TOUS les profils transférés !\n${detectedProfiles.length} utilisateur(s) détecté(s)\nLien: ${transferLink}\n\nMême si les utilisateurs ne sont plus dans la room, leurs profils sont sauvegardés !`);
         }).catch(err => {
             console.error('Failed to copy link:', err);
             showNotification('Erreur lors de la copie du lien');
