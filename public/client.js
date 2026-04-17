@@ -974,12 +974,11 @@ socket.on('profile-update', (data) => {
 socket.on('sync-profiles', (profiles) => {
     for (const id in profiles) {
         if (id === socket.id || id === 'local') continue;
-        if (profiles[id]) {
-            remoteProfiles[id] = {
-                displayName: profiles[id].displayName,
-                profileColor: sanitizeColor(profiles[id].profileColor)
-            };
-        }
+        const prof = profiles[id] || { displayName: 'Guest', profileColor: '#4A90E2' };
+        remoteProfiles[id] = {
+            displayName: prof.displayName || 'Guest',
+            profileColor: sanitizeColor(prof.profileColor || '#4A90E2')
+        };
         updatePeerUI(id);
     }
     // Re-apply mod buttons after peers are created (with delay to ensure DOM ready)

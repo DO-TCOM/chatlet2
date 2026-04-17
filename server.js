@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const https = require('https');
@@ -256,7 +257,10 @@ const io = socketIo(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const MOD_PASSWORD = process.env.MOD_PASSWORD || 'un_mot_de_passe_secret_solide';
+const MOD_PASSWORD = process.env.MOD_PASSWORD || null;
+if (!MOD_PASSWORD) {
+    console.error('[WARN] MOD_PASSWORD non défini en variable d\'environnement — modération désactivée!');
+}
 // MOD_PASSWORD is for the mod script, STATS_PASSWORD is for the stats dashboard.
 const bannedIps = new Set();
 
@@ -847,6 +851,7 @@ io.on('connection', (socket) => {
                 if (Object.keys(profile).length > 0) {
                     socket.data.profile = profile;
                     socket.emit('profile-update', profile);
+                    // Only broadcast to room if this is adding NEW info not already sent
                     socket.to(roomId).emit('profile-update', {
                         id: socket.id,
                         displayName: profile.displayName,
@@ -884,8 +889,8 @@ io.on('connection', (socket) => {
         const roomProfiles = {};
         for (const remoteSocket of sockets) {
             if (remoteSocket.id === socket.id) continue;
-            // Include all peers, even those without profile yet (placeholder)
-            roomProfiles[remoteSocket.id] = remoteSocket.data.profile || null;
+            // Always include peer: with profile or default fallback
+            roomProfiles[remoteSocket.id] = remoteSocket.data.profile || { displayName: 'Guest', profileColor: '#4A90E2' };
         }
         socket.emit('sync-profiles', roomProfiles);
     } catch (err) {
@@ -943,27 +948,46 @@ io.on('connection', (socket) => {
             log(`[Profile] Saved profile for cross-domain transfer: ${data.displayName} (${realIp})`);
         } catch(e) {}
     })();
+    // Update pseudo in logs (Redis OR file fallback)
     (async () => {
         try {
-            const logData = await fsp.readFile(LOG_FILE, 'utf8');
-            const lines = logData.split('\n');
-            const updated = lines.map(line => {
-                if (line.includes(`IP: ${realIp}`)) {
-                    // Update pseudo field (between 5th and 6th pipe)
-                    const parts = line.split(' | ');
-                    if (parts.length >= 5) {
-                        const names = socket.data.pseudos || new Set();
-                        names.add(data.displayName);
-                        socket.data.pseudos = names;
-                        // Deduplicate pseudos
-                        parts[4] = Array.from(new Set(Array.from(names))).join(', ');
-                        return parts.join(' | ');
+            const names = socket.data.pseudos || new Set();
+            names.add(data.displayName);
+            socket.data.pseudos = names;
+            const pseudoStr = Array.from(new Set(Array.from(names))).join(', ');
+
+            if (redisStore) {
+                // Update pseudo in Redis log list
+                const lines = await redisStore.lRange('logs', 0, -1);
+                const updated = lines.map(line => {
+                    if (line.includes(`IP: ${realIp}`)) {
+                        const parts = line.split(' | ');
+                        if (parts.length >= 5) {
+                            parts[4] = pseudoStr;
+                            return parts.join(' | ');
+                        }
                     }
-                }
-                return line;
-            });
-            await fsp.writeFile(LOG_FILE, updated.join('\n'), 'utf8');
-        } catch (e) {}
+                    return line;
+                });
+                await redisStore.del('logs');
+                if (updated.length > 0) await redisStore.rPush('logs', ...updated);
+            } else {
+                // Fallback: update in file
+                const logData = await fsp.readFile(LOG_FILE, 'utf8');
+                const lines = logData.split('\n');
+                const updated = lines.map(line => {
+                    if (line.includes(`IP: ${realIp}`)) {
+                        const parts = line.split(' | ');
+                        if (parts.length >= 5) {
+                            parts[4] = pseudoStr;
+                            return parts.join(' | ');
+                        }
+                    }
+                    return line;
+                });
+                await fsp.writeFile(LOG_FILE, updated.join('\n'), 'utf8');
+            }
+        } catch (e) { log('Error updating pseudo in logs:', e.message); }
     })();
   });
 
@@ -1019,6 +1043,10 @@ io.on('connection', (socket) => {
     // Support both old string format and new object format
     const password = typeof data === 'object' ? data.password : data;
     const displayName = typeof data === 'object' ? data.displayName : null;
+    if (!MOD_PASSWORD || !password || password.length === 0) {
+      socket.emit('mod-status', false);
+      return;
+    }
     if (password === MOD_PASSWORD) {
       socket.data.isMod = true;
       // Store mod display name directly in case profile isn't set yet

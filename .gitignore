@@ -11,3 +11,5 @@ yarn-error.log*
 notes.json
 extras.json
 display.txt
+.env
+server.js.bak
