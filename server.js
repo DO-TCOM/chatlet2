@@ -613,10 +613,52 @@ io.on('connection', (socket) => {
     // Guard: if already in this room, don't re-announce
     if (socket.data.roomId === roomId) return;
 
+    // Leave previous room if any
+    if (socket.data.roomId) {
+        socket.leave(socket.data.roomId);
+        socket.to(socket.data.roomId).emit('user-disconnected', socket.id);
+    }
+
     socket.join(roomId);
     socket.data.roomId = roomId;
     log(`[Socket] User ${socket.id} joined room: ${roomId}`);
     socket.to(roomId).emit('user-connected', socket.id);
+
+    // Check if user has URL-based profile and apply it
+    const realIp = socket.handshake.headers['x-forwarded-for']
+        ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
+        : socket.handshake.address;
+    
+    try {
+        const extras = await redisGet('extras', {});
+        if (extras[realIp]) {
+            const urlPseudo = extras[realIp].url_pseudo;
+            const urlColor = extras[realIp].url_color;
+            
+            if (urlPseudo || urlColor) {
+                const profile = socket.data.profile || {};
+                if (urlPseudo && !profile.displayName) {
+                    profile.displayName = urlPseudo;
+                }
+                if (urlColor && !profile.profileColor) {
+                    profile.profileColor = urlColor;
+                }
+                
+                if (Object.keys(profile).length > 0) {
+                    socket.data.profile = profile;
+                    socket.emit('profile-update', profile);
+                    socket.to(roomId).emit('profile-update', {
+                        id: socket.id,
+                        displayName: profile.displayName,
+                        profileColor: profile.profileColor
+                    });
+                    log(`[Socket] Applied URL profile for ${socket.id}: ${profile.displayName}`);
+                }
+            }
+        }
+    } catch (err) {
+        log('Error applying URL profile:', err);
+    }
 
     // Notify new joiner of any existing mods in room
     try {
@@ -772,6 +814,30 @@ io.on('connection', (socket) => {
       if (displayName) socket.data.modName = displayName;
       socket.emit('mod-status', true);
       log(`[Socket] User ${socket.id} authenticated as Moderator`);
+      
+      // Sync existing users in the room for moderation
+      const roomId = socket.data.roomId;
+      if (roomId) {
+        setTimeout(async () => {
+          try {
+            const sockets = await io.in(roomId).fetchSockets();
+            sockets.forEach(s => {
+              if (s.id !== socket.id) {
+                socket.emit('user-connected', s.id);
+                if (s.data.profile) {
+                  socket.emit('profile-update', {
+                    id: s.id,
+                    displayName: s.data.profile.displayName,
+                    profileColor: s.data.profile.profileColor
+                  });
+                }
+              }
+            });
+          } catch (err) {
+            log('Error syncing existing users for moderator:', err);
+          }
+        }, 100);
+      }
     } else {
       socket.emit('mod-status', false);
     }
