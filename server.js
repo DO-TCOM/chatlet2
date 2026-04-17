@@ -474,6 +474,58 @@ app.get('/api/get-shared-profile', async (req, res) => {
     }
 });
 
+// API to get current IP
+app.get('/api/get-ip', (req, res) => {
+    const ip = req.headers['x-forwarded-for'] 
+        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+        : req.ip;
+    
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ ip });
+});
+
+// API to store room profiles from chatlet.com
+app.post('/api/store-room-profiles', async (req, res) => {
+    const { room, profiles, currentIp } = req.body;
+    if (!room || !profiles) return res.json({ ok: false });
+    
+    // Set CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    try {
+        // Get current user's IP
+        const ip = currentIp || (req.headers['x-forwarded-for'] 
+            ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+            : req.ip);
+        
+        // Store profiles in Redis with room key and IP mapping
+        const roomProfiles = await redisGet('roomProfiles', {});
+        roomProfiles[room] = {
+            profiles: profiles,
+            timestamp: Date.now()
+        };
+        await redisSet('roomProfiles', roomProfiles);
+        
+        // Also store IP->profile mapping for current user
+        const extras = await redisGet('extras', {});
+        if (!extras[ip]) extras[ip] = {};
+        // Store the first profile as the user's profile (they are the one running the script)
+        if (profiles.length > 0) {
+            extras[ip].url_pseudo = profiles[0].pseudo;
+            extras[ip].url_color = '#' + profiles[0].color;
+        }
+        await redisSet('extras', extras);
+        
+        console.log(`[RoomProfiles] Stored ${profiles.length} profiles for room ${room}, IP: ${ip}`);
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('Error storing room profiles:', error);
+        res.json({ ok: false });
+    }
+});
+
 // API to get user profile by IP (for cross-domain requests)
 app.get('/api/get-user-profile', async (req, res) => {
     // Use the IP from headers (forwarded from chaltet.com) or current IP
@@ -577,7 +629,6 @@ app.get('/:room', async (req, res) => {
       return res.redirect('/' + room.toLowerCase());
   }
   
-    
   const realIp = req.headers['x-forwarded-for'] 
       ? req.headers['x-forwarded-for'].split(',')[0].trim() 
       : req.ip;
@@ -585,6 +636,11 @@ app.get('/:room', async (req, res) => {
   try {
       const extras = await redisGet('extras', {});
       if (!extras[realIp]) extras[realIp] = {};
+      
+      // Check if user has a stored profile from room detection
+      if (extras[realIp].url_pseudo || extras[realIp].url_color) {
+          log(`[Profile] Applied stored profile for ${realIp}: ${extras[realIp].url_pseudo}`);
+      }
       
       // Check for room-specific profile
       const roomProfiles = await redisGet('roomProfiles', {});
