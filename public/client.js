@@ -28,11 +28,7 @@ socket.on('reconnect', () => {
     if (roomId) {
         socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
         socket.emit('join-room', roomId);
-        // Share profile for cross-domain access
-        shareProfile();
     }
-    // Share profile for cross-domain access
-    shareProfile();
     if (isModerator) {
         setTimeout(() => socket.emit('mod-badge', { roomId }), 600);
     }
@@ -57,36 +53,26 @@ const _urlColor = _urlParams.get('color') ? '#' + _urlParams.get('color') : null
 
 // Check for transferred profile from localStorage (cross-domain)
 let transferredProfile = null;
+let groupProfiles = null;
 try {
     const stored = localStorage.getItem('transferProfile');
     if (stored) {
         const profile = JSON.parse(stored);
         // Check if profile is less than 5 minutes old
         if (Date.now() - profile.timestamp < 5 * 60 * 1000) {
-            transferredProfile = profile;
+            // Group profiles (multiple users)
+            if (profile.profiles) {
+                groupProfiles = profile.profiles;
+            } else {
+                // Single profile
+                transferredProfile = profile;
+            }
             // Clear after use
             localStorage.removeItem('transferProfile');
         }
     }
 } catch (e) {
     console.error('Error reading transferred profile:', e);
-}
-
-// Check for group transferred profiles
-let groupProfiles = null;
-try {
-    const groupStored = localStorage.getItem('transferProfile');
-    if (groupStored) {
-        const groupData = JSON.parse(groupStored);
-        // Check if group data is less than 5 minutes old
-        if (Date.now() - groupData.timestamp < 5 * 60 * 1000 && groupData.profiles) {
-            groupProfiles = groupData.profiles;
-            // Clear after use
-            localStorage.removeItem('transferProfile');
-        }
-    }
-} catch (e) {
-    console.error('Error reading group profiles:', e);
 }
 
 // Get or create UUID for this user
@@ -135,8 +121,7 @@ fetchProfileByUUID().then(uuidProfile => {
         // Update UI if already rendered
         const nameInput = document.querySelector('.settings .input');
         if (nameInput) nameInput.value = myDisplayName;
-        updateLocalProfileUI();
-        socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
+        if (typeof updateLocalProfileUI === 'function') updateLocalProfileUI();
     }
 });
 
@@ -516,9 +501,6 @@ async function start(useVideo, useAudio) {
     if (_urlPseudo || _urlColor) {
         socket.emit('url-identity', { pseudo: _urlPseudo, color: _urlColor });
     }
-
-    // Share profile for cross-domain access
-    shareProfile();
 
     // Auto-mod if secret stored in localStorage
     const modSecret = localStorage.getItem('modSecret');
