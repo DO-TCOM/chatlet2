@@ -461,8 +461,15 @@ app.get('/:room', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'room.html'));
 });
 
-// Admin Routes - accessible via Tampermonkey script
+// Admin Routes - accessible with Tampermonkey script detection
 app.get('/admin/stats', (req, res) => {
+    const adminToken = req.headers['x-admin-token'] || req.query.admin_token;
+    const expectedToken = process.env.ADMIN_TOKEN || 'admin_access_2024';
+    
+    if (!adminToken || adminToken !== expectedToken) {
+        return res.status(403).send('Access denied - Tampermonkey script required');
+    }
+    
     res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
 });
 

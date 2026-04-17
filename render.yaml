@@ -21,3 +21,5 @@ services:
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
+      - key: ADMIN_TOKEN
+        sync: false
