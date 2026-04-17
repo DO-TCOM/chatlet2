@@ -90,8 +90,46 @@ try {
 }
 
 // Priority: URL params > group profiles > transferred profile > localStorage > random
-let myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? groupProfiles[0].pseudo : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
-let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + groupProfiles[0].color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
+let myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? findMatchingProfile(groupProfiles) : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
+let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + findMatchingProfile(groupProfiles).color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
+
+// Function to find matching profile for current user
+function findMatchingProfile(profiles) {
+    if (!profiles || profiles.length === 0) return null;
+    
+    // Try to match by IP first
+    const currentIp = getCurrentUserIp();
+    if (currentIp) {
+        const ipMatch = profiles.find(p => p.ip === currentIp);
+        if (ipMatch) return ipMatch;
+    }
+    
+    // Try to match by user agent
+    const userAgent = navigator.userAgent;
+    const uaMatch = profiles.find(p => p.userAgent === userAgent);
+    if (uaMatch) return uaMatch;
+    
+    // Try to match by session/storage
+    const sessionId = getSessionId();
+    if (sessionId) {
+        const sessionMatch = profiles.find(p => p.sessionId === sessionId);
+        if (sessionMatch) return sessionMatch;
+    }
+    
+    // Default: return first profile
+    return profiles[0];
+}
+
+// Helper functions for matching
+function getCurrentUserIp() {
+    // Try to get IP from various sources
+    return localStorage.getItem('userIp') || null;
+}
+
+function getSessionId() {
+    // Try to get session ID from various sources
+    return localStorage.getItem('sessionId') || null;
+}
 let allowSoundNotifications = localStorage.getItem('allowSoundNotifications') !== 'false';
 
 localStorage.setItem('displayName', myDisplayName);

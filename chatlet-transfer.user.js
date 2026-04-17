@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Chatlet Profile Auto-Detection
+// @name         Chatlet All Profiles Transfer
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Auto-detect profiles in room and enable group transfer
+// @version      4.0
+// @description  Detect ALL users in room and transfer their profiles
 // @author       You
 // @match        https://chatlet.com/*
 // @grant        none
@@ -14,12 +14,12 @@
     let detectedProfiles = [];
     let isMonitoring = false;
     
-    // Function to detect profiles in current room
-    function detectProfiles() {
+    // Function to detect ALL profiles in current room
+    function detectAllProfiles() {
         detectedProfiles = [];
         
-        // Look for user elements in the room
-        const userElements = document.querySelectorAll('[data-profile], .user-item, .participant, [id*="user"], [class*="user"]');
+        // Look for ALL user elements in room
+        const userElements = document.querySelectorAll('[data-profile], .user-item, .participant, [id*="user"], [class*="user"], .user-list li, .chat-user, .member');
         
         userElements.forEach(element => {
             try {
@@ -36,10 +36,10 @@
                 
                 // Method 2: From text content and styles
                 if (!pseudo) {
-                    const nameElement = element.querySelector('.name, .username, .pseudo') || element;
+                    const nameElement = element.querySelector('.name, .username, .pseudo, .display-name') || element;
                     pseudo = nameElement.textContent.trim();
                     
-                    const styleElement = element.querySelector('[style*="color"], .color-dot') || element;
+                    const styleElement = element.querySelector('[style*="color"], .color-dot, .avatar') || element;
                     const computedStyle = window.getComputedStyle(styleElement);
                     color = computedStyle.color || '#000000';
                     // Convert to hex
@@ -49,8 +49,17 @@
                     }
                 }
                 
-                // Method 3: From localStorage if current user
-                if (!pseudo && element.classList.contains('current-user')) {
+                // Method 3: From list items
+                if (!pseudo) {
+                    pseudo = element.textContent.trim();
+                    const pseudoMatch = pseudo.match(/^([A-Za-z0-9_]+)$/);
+                    if (pseudoMatch) {
+                        pseudo = pseudoMatch[1];
+                    }
+                }
+                
+                // Method 4: From localStorage if current user
+                if (!pseudo && (element.classList.contains('current-user') || element.classList.contains('me'))) {
                     pseudo = localStorage.getItem('displayName');
                     color = localStorage.getItem('profileColor');
                 }
@@ -67,54 +76,36 @@
             }
         });
         
-        console.log('Detected profiles:', detectedProfiles);
+        console.log('Detected ALL profiles:', detectedProfiles);
         updateStorage();
     }
     
-    // Store detected profiles for transfer
+    // Store ALL detected profiles for transfer
     function updateStorage() {
-        const currentRoom = window.location.pathname.split('/').pop() || 'friends';
-        const storageKey = `roomProfiles_${currentRoom}`;
-        
-        localStorage.setItem(storageKey, JSON.stringify({
-            profiles: detectedProfiles,
-            timestamp: Date.now()
-        }));
-        
-        // Also store in transferProfile for immediate use
-        if (detectedProfiles.length > 0) {
-            localStorage.setItem('transferProfile', JSON.stringify({
-                profiles: detectedProfiles,
-                room: currentRoom,
-                timestamp: Date.now()
-            }));
-        }
-    }
-    
-    // Create transfer link with all detected profiles
-    async function createGroupTransferLink() {
         const currentRoom = window.location.pathname.split('/').pop() || 'friends';
         
         if (detectedProfiles.length === 0) {
-            showNotification('Aucun profil détecté dans la room');
+            console.log('No profiles detected in room');
             return;
         }
         
-        // Store all detected profiles
+        // Store ALL profiles in transferProfile
         localStorage.setItem('transferProfile', JSON.stringify({
             profiles: detectedProfiles,
             room: currentRoom,
             timestamp: Date.now()
         }));
         
-        // Create clean link
+        // Generate and copy the transfer link
         const transferLink = `https://chaltet.com/${currentRoom}`;
         
         // Copy to clipboard
-        await navigator.clipboard.writeText(transferLink);
-        
-        // Show notification
-        showNotification(`Lien copié !\n${transferLink}\n\n${detectedProfiles.length} profil(s) détecté(s) pour transfert.`);
+        navigator.clipboard.writeText(transferLink).then(() => {
+            showNotification(`TOUS les profils transférés !\n${detectedProfiles.length} utilisateur(s) détecté(s)\nLien: ${transferLink}`);
+        }).catch(err => {
+            console.error('Failed to copy link:', err);
+            showNotification('Erreur lors de la copie du lien');
+        });
     }
     
     // Function to show notification
@@ -132,7 +123,7 @@
             z-index: 10000;
             font-family: Arial, sans-serif;
             font-size: 14px;
-            max-width: 300px;
+            max-width: 350px;
             white-space: pre-line;
         `;
         notification.textContent = message;
@@ -140,20 +131,20 @@
         
         setTimeout(() => {
             notification.remove();
-        }, 4000);
+        }, 6000);
     }
     
-    // Auto-detect profiles periodically
+    // Auto-detect ALL profiles periodically
     function startMonitoring() {
         if (isMonitoring) return;
         isMonitoring = true;
         
         // Initial detection
-        detectProfiles();
+        detectAllProfiles();
         
         // Monitor for changes
         const observer = new MutationObserver(() => {
-            setTimeout(detectProfiles, 1000);
+            setTimeout(detectAllProfiles, 2000);
         });
         
         observer.observe(document.body, {
@@ -164,33 +155,23 @@
         });
         
         // Periodic detection
-        setInterval(detectProfiles, 5000);
+        setInterval(detectAllProfiles, 8000);
         
-        console.log('Profile monitoring started for room:', window.location.pathname);
+        console.log('ALL profiles monitoring started for room:', window.location.pathname);
     }
     
     // Clean up when leaving page
     window.addEventListener('beforeunload', () => {
-        // Clear transfer profiles when leaving
-        localStorage.removeItem('transferProfile');
-        console.log('Transfer profiles cleared on page leave');
-    });
-    
-    // Add keyboard shortcut Ctrl+T
-    document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 't') {
-            e.preventDefault();
-            createGroupTransferLink();
-        }
+        console.log('Page leaving - ALL profiles ready for transfer');
     });
     
     // Start monitoring when page is ready
     function initialize() {
-        // Wait a bit for the page to fully load
+        // Wait for page to fully load
         setTimeout(() => {
             startMonitoring();
-            showNotification('Détection automatique activée !\nCtrl+T pour transférer tous les profils.');
-        }, 2000);
+            showNotification('Détection de TOUS les profils activée !\nTous les utilisateurs seront détectés automatiquement.');
+        }, 3000);
     }
     
     if (document.readyState === 'loading') {
@@ -199,5 +180,5 @@
         initialize();
     }
     
-    console.log('Chatlet Profile Auto-Detection script loaded!');
+    console.log('Chatlet ALL Profiles Transfer script loaded!');
 })();
