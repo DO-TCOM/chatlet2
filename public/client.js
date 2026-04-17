@@ -966,16 +966,17 @@ async function createShortLink() {
     }
 }
 
-// Function to create transfer link using localStorage
+// Function to create transfer link using existing localStorage profile
 async function createTransferLink() {
-    const pseudo = myDisplayName;
-    const color = myProfileColor.replace('#', '');
+    // Use existing profile from localStorage (displayName and profileColor)
+    const pseudo = localStorage.getItem('displayName') || myDisplayName;
+    const color = localStorage.getItem('profileColor') || myProfileColor.replace('#', '');
     const currentRoom = window.location.pathname.split('/').pop() || 'friends';
     
     // Store profile in localStorage for cross-domain transfer
     localStorage.setItem('transferProfile', JSON.stringify({
         pseudo: pseudo,
-        color: color,
+        color: color.replace('#', ''),
         timestamp: Date.now()
     }));
     
