@@ -2,6 +2,7 @@
 "use strict";
 
 const socket = io();
+window.socket = socket;
 
 socket.on('connect_error', () => {
     const existing = document.getElementById('connection-error');

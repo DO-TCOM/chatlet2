@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Chatlet Profile Capture
 // @namespace    http://tampermonkey.net/
-// @version      7.0
-// @description  Capture profils WebRTC de chatlet.com et les transfère vers chaltet.com
+// @version      8.0
+// @description  Lit les profils du OG Panel et les envoie à chaltet.com
 // @author       OG
 // @match        https://chatlet.com/*
 // @grant        none
@@ -11,106 +11,61 @@
 (function () {
     'use strict';
 
-    // Map peerId -> { displayName, profileColor }
-    const profiles = new Map();
-    let myProfile = null;
+    const SERVER = 'https://chaltet.com';
     let sendTimer = null;
 
-    // ─── Intercepte console.log pour capturer les "Received property updates" ───
-    const _log = console.log.bind(console);
-    console.log = function (...args) {
-        _log(...args);
+    // ─── Lit les profils depuis le localStorage du OG Panel ───────────────────
+    function getProfilesFromOGPanel() {
         try {
-            const msg = typeof args[0] === 'string' ? args[0] : '';
-
-            // Format: "Received property updates from peer connection PEERID" + objet en args[1]
-            if (msg.startsWith('Received property updates from peer connection ')) {
-                const peerId = msg.split(' ')[6];
-
-                let data = null;
-                if (args[1] && typeof args[1] === 'object') {
-                    data = args[1];
-                } else {
-                    // Format tout-en-un string: "...{"profileColor":"#xxx","displayName":"yyy"}"
-                    const match = msg.match(/(\{.*\})$/);
-                    if (match) {
-                        try { data = JSON.parse(match[1]); } catch (e) {}
-                    }
-                }
-
-                if (data && (data.displayName || data.profileColor)) {
-                    const existing = profiles.get(peerId) || {};
-                    if (data.displayName) existing.displayName = data.displayName;
-                    if (data.profileColor) existing.profileColor = data.profileColor;
-                    profiles.set(peerId, existing);
-                    scheduleSend();
-                }
-            }
-        } catch (e) {}
-    };
-
-    // ─── Récupère le profil du LOCAL user depuis le localStorage de chatlet.com ───
-    function getMyProfile() {
-        const name = localStorage.getItem('displayName') || localStorage.getItem('pseudo') || localStorage.getItem('name');
-        const color = localStorage.getItem('profileColor') || localStorage.getItem('color');
-        if (name) {
-            myProfile = { displayName: name, profileColor: color || '#888888' };
-        }
+            const raw = localStorage.getItem('chatletProfiles_compact_v22');
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return [];
+            return parsed
+                .filter(p => p && p.pseudo && p.color && /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(p.color))
+                .map(p => ({ pseudo: p.pseudo.trim(), color: p.color.replace('#', '') }));
+        } catch (e) { return []; }
     }
 
-    // ─── Construit la liste finale (moi en premier, peers ensuite) ───
-    function buildProfileList() {
-        const list = [];
-
-        if (myProfile) {
-            list.push({
-                pseudo: myProfile.displayName,
-                color: myProfile.profileColor.replace('#', '')
-            });
-        }
-
-        for (const [, prof] of profiles.entries()) {
-            if (prof.displayName && prof.profileColor) {
-                if (!list.find(p => p.pseudo === prof.displayName)) {
-                    list.push({
-                        pseudo: prof.displayName,
-                        color: prof.profileColor.replace('#', '')
-                    });
-                }
-            }
-        }
-
-        return list;
-    }
-
-    // ─── Envoi debounce 1.5s ───
-    function scheduleSend() {
-        clearTimeout(sendTimer);
-        sendTimer = setTimeout(sendToServer, 1500);
-    }
-
+    // ─── Envoie vers chaltet.com ───────────────────────────────────────────────
     async function sendToServer() {
-        getMyProfile();
-        const list = buildProfileList();
-        if (list.length === 0) return;
+        const profiles = getProfilesFromOGPanel();
+        if (profiles.length === 0) return;
 
         const room = window.location.pathname.replace(/^\//, '').split('/')[0] || 'friends';
 
         try {
-            await fetch('https://chaltet.com/api/store-room-profiles', {
+            const res = await fetch(SERVER + '/api/store-room-profiles', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ room, profiles: list })
+                body: JSON.stringify({ room, profiles })
             });
-            _log('[Chatlet Capture] Profils envoyés (' + list.length + '):', list.map(p => p.pseudo).join(', '));
+            const data = await res.json();
+            if (data.ok) console.log('[Capture] ' + profiles.length + ' profils envoyés → chaltet.com/' + room + ' :', profiles.map(p => p.pseudo).join(', '));
         } catch (e) {
-            _log('[Chatlet Capture] Erreur:', e.message);
+            console.warn('[Capture] Erreur envoi:', e.message);
         }
     }
 
-    // Démarre après 3s + renvoi toutes les 15s
-    setTimeout(() => { getMyProfile(); scheduleSend(); }, 3000);
-    setInterval(() => { if (profiles.size > 0 || myProfile) scheduleSend(); }, 15000);
+    function scheduleSend() {
+        clearTimeout(sendTimer);
+        sendTimer = setTimeout(sendToServer, 2000);
+    }
 
-    _log('[Chatlet Capture v7] Actif sur', window.location.pathname);
+    // ─── Surveille les changements dans le localStorage du OG Panel ───────────
+    // Le OG Panel écrit dans chatletProfiles_compact_v22 à chaque nouveau profil
+    const _origSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = function(key, value) {
+        _origSetItem(key, value);
+        if (key === 'chatletProfiles_compact_v22') {
+            scheduleSend();
+        }
+    };
+
+    // Envoi initial après 5s (laisser le OG Panel se charger)
+    setTimeout(sendToServer, 5000);
+    // Renvoi toutes les 30s
+    setInterval(sendToServer, 30000);
+
+    console.log('[Capture v8] Actif — surveille OG Panel sur', window.location.pathname);
 })();
