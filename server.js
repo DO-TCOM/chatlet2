@@ -1096,6 +1096,7 @@ io.on('connection', (socket) => {
 
   socket.on('mod-kick', (targetId) => {
     if (!socket.data.isMod) return;
+    if (typeof targetId !== 'string' || targetId.length === 0) return;
     const modName = 'OvO';
     io.to(targetId).emit('mod-action', { type: 'kicked', by: modName });
     setTimeout(() => io.in(targetId).disconnectSockets(true), 500);
@@ -1104,6 +1105,7 @@ io.on('connection', (socket) => {
 
   socket.on('mod-kick-temp', (targetId) => {
     if (!socket.data.isMod) return;
+    if (typeof targetId !== 'string' || targetId.length === 0) return;
     const modName = 'OvO';
     const targetSocket = io.sockets.sockets.get(targetId);
     if (targetSocket) {
@@ -1142,17 +1144,23 @@ io.on('connection', (socket) => {
 
   socket.on('mod-mute', (targetId) => {
     if (!socket.data.isMod) return;
+    if (typeof targetId !== 'string' || targetId.length === 0) return;
     const targetSocket = io.sockets.sockets.get(targetId);
     if (targetSocket) targetSocket.data.isMuted = true;
     io.to(targetId).emit('mod-action', { type: 'muted', by: 'OvO' });
+    // Notifier le mod que le mute a été appliqué → sync boutons
+    socket.emit('mod-mute-ack', { targetId, muted: true });
     log(`[Socket] Moderator ${socket.id} muted ${targetId}`);
   });
 
   socket.on('mod-unmute', (targetId) => {
     if (!socket.data.isMod) return;
+    if (typeof targetId !== 'string' || targetId.length === 0) return;
     const targetSocket = io.sockets.sockets.get(targetId);
     if (targetSocket) targetSocket.data.isMuted = false;
     io.to(targetId).emit('mod-action', { type: 'unmuted', by: 'OvO' });
+    // Notifier le mod que le unmute a été appliqué → sync boutons
+    socket.emit('mod-mute-ack', { targetId, muted: false });
     log(`[Socket] Moderator ${socket.id} unmuted ${targetId}`);
   });
 });

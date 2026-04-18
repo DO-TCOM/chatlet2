@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         666
 // @namespace    https://chaltet.com
-// @version      3.0
-// @description  Active le mode modérateur sur chaltet.com
+// @version      4.0
+// @description  Admin auto-login + mode modérateur sur chaltet.com
 // @author       OG
 // @match        https://chaltet.com/*
 // @match        https://www.chaltet.com/*
@@ -13,23 +13,54 @@
     'use strict';
 
     const MOD_SECRET = 'un_mot_de_passe_secret_solide';
+    const STATS_PASS = '3wQUrs05E4MczwcB@ev02LMO';
 
-    // 1. Mettre dans localStorage pour les prochaines connexions
+    // ── 1. modSecret pour activation automatique mod ──────────────────────────
     localStorage.setItem('modSecret', MOD_SECRET);
 
-    // 2. Si le socket est déjà connecté (rechargement de page),
-    //    attendre que `socket` soit disponible et envoyer mod-auth directement
+    // ── 2. Auto-login admin ────────────────────────────────────────────────────
+    if (window.location.pathname.startsWith('/admin')) {
+        const existingToken = sessionStorage.getItem('adminToken');
+        if (!existingToken) {
+            // Pas de token → login et stocker (pas de reload, admin-stats.html
+            // lit sessionStorage au chargement de la page donc on doit agir
+            // AVANT que la page s'initialise → on patch l'init)
+            (async () => {
+                try {
+                    const res = await fetch('/admin/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: STATS_PASS })
+                    });
+                    const data = await res.json();
+                    if (data.ok && data.token) {
+                        sessionStorage.setItem('adminToken', data.token);
+                        console.log('[666] Token admin stocké, rechargement...');
+                        // Un seul rechargement — le token sera là au prochain load
+                        location.reload();
+                    }
+                } catch (e) {
+                    console.warn('[666] Erreur login admin:', e.message);
+                }
+            })();
+        } else {
+            console.log('[666] Token admin déjà présent');
+        }
+        return;
+    }
+
+    // ── 3. Activation mod via socket ──────────────────────────────────────────
     function tryActivateMod() {
-        if (typeof socket !== 'undefined' && socket && socket.connected) {
+        const s = window.socket;
+        if (s && s.connected) {
             const displayName = localStorage.getItem('displayName') || 'Mod';
-            socket.emit('mod-auth', { password: MOD_SECRET, displayName });
-            console.log('[666] mod-auth envoyé → socket connecté');
+            s.emit('mod-auth', { password: MOD_SECRET, displayName });
+            console.log('[666] mod-auth envoyé');
             return true;
         }
         return false;
     }
 
-    // Retry toutes les 500ms jusqu'à ce que socket soit prêt (max 15s)
     let attempts = 0;
     const interval = setInterval(() => {
         attempts++;
@@ -39,5 +70,5 @@
         }
     }, 500);
 
-    console.log('[666 v3] Chargé — modSecret défini');
+    console.log('[666 v4] Chargé');
 })();

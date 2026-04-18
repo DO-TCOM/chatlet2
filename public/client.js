@@ -255,6 +255,7 @@ const audioUnsure = document.getElementById('audioUnsure');
 const audioMessage = document.getElementById('audioMessage');
 
 const remoteProfiles = {};
+const mutedPeers = new Set(); // IDs des peers mutés par le mod
 let screenStream;
 let featuredUserId = null;
 let iceServersConfig = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -271,11 +272,15 @@ function escapeHTML(str) {
 }
 
 function linkify(str) {
-    const escaped = escapeHTML(str);
-    return escaped.replace(
-        /(https?:\/\/[^\s<>"]+)/g,
-        '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#77FFFF;text-decoration:underline;">$1</a>'
-    );
+    const urlRegex = /(https?:\/\/[^\s<>"]+)/g;
+    const parts = str.split(urlRegex);
+    return parts.map((part, i) => {
+        if (i % 2 === 1) {
+            const safeUrl = part.replace(/"/g, '%22');
+            return '<a href="' + safeUrl + '" target="_blank" rel="noopener noreferrer" style="color:#77FFFF;text-decoration:underline;">' + escapeHTML(part) + '</a>';
+        }
+        return escapeHTML(part);
+    }).join('');
 }
 
 function updateLocalProfileUI() {
@@ -400,36 +405,73 @@ document.addEventListener('DOMContentLoaded', async () => {
         applyBadge();
     });
 
+    // Confirmation serveur quand un peer est muté/démuté → sync boutons mod
+    socket.on('mod-mute-ack', (data) => {
+        const { targetId, muted } = data;
+        if (muted) {
+            mutedPeers.add(targetId);
+        } else {
+            mutedPeers.delete(targetId);
+        }
+        syncMuteButtons(targetId);
+        // Sync aussi le featured si c'est lui
+        if (featuredUserId === targetId) {
+            const featuredEl = document.querySelector('.peer.featured');
+            if (featuredEl) {
+                featuredEl.querySelector('.mod-controls')?.remove();
+                const id = targetId;
+                const modDiv = document.createElement('div');
+                modDiv.id = 'featured-mod-controls';
+                modDiv.className = 'mod-controls';
+                modDiv.style.cssText = 'position:absolute;top:10px;left:10px;display:flex;gap:6px;z-index:10;flex-wrap:wrap;';
+                const makeBtn = (label, bg, action) => {
+                    const btn = document.createElement('button');
+                    btn.innerText = label;
+                    btn.style.cssText = `font-size:12px;padding:4px 10px;width:auto;height:auto;background:${bg};color:white;border:none;border-radius:4px;cursor:pointer;`;
+                    btn.onclick = (e) => { e.stopPropagation(); socket.emit(action, id); };
+                    return btn;
+                };
+                modDiv.appendChild(makeBtn('Kick', '#ff8800', 'mod-kick'));
+                modDiv.appendChild(makeBtn('Kick 30s', '#ff5500', 'mod-kick-temp'));
+                modDiv.appendChild(makeBtn('Ban', '#cc0000', 'mod-ban'));
+                modDiv.appendChild(buildMuteBtn(id, false, '12px', '4px 10px'));
+                featuredEl.appendChild(modDiv);
+            }
+        }
+    });
+
     socket.on('mod-action', (action) => {
-        // Support both old string format and new object format
         const type = typeof action === 'object' ? action.type : action;
-        const by = typeof action === 'object' ? action.by : 'Mod';
+        const by   = typeof action === 'object' ? (action.by || 'Mod') : 'Mod';
 
         if (type === 'muted') {
             chatInputField.disabled = true;
-            chatInputField.placeholder = "You are muted.";
+            chatInputField.placeholder = 'You are muted by ' + by + '.';
             if (localStream) {
                 localStream.getAudioTracks().forEach(t => { t.enabled = false; });
                 toggleAudioBtn.classList.add('off');
             }
-            showModOverlay(`Mute by ${by}`, () => {}, true);
+            showModOverlay('Muted by ' + by, () => {}, true);
         } else if (type === 'unmuted') {
             chatInputField.disabled = false;
-            chatInputField.placeholder = "";
+            chatInputField.placeholder = '';
             if (localStream) {
                 localStream.getAudioTracks().forEach(t => { t.enabled = true; });
                 toggleAudioBtn.classList.remove('off');
             }
-            showModOverlay(`Unmute by ${by}`, () => {}, true);
+            showModOverlay('Unmuted by ' + by, () => {}, true);
         } else if (type === 'kicked') {
             socket.disconnect();
-            showModOverlay(`KICK by ${by}`, () => window.location.reload());
+            showModOverlay('KICK by ' + by, () => window.location.reload());
         } else if (type === 'kicked-temp') {
             socket.disconnect();
-            showModOverlay(`KICK 30sec by ${by}`, () => window.location.reload());
+            showModOverlay('KICK 30s by ' + by, () => {
+                // Attendre 30s avant de permettre le retour
+                setTimeout(() => window.location.reload(), 30000);
+            });
         } else if (type === 'banned') {
             socket.disconnect();
-            showModOverlay(`BAN by ${by}`, () => { window.location.href = 'https://www.google.com'; });
+            showModOverlay('BAN by ' + by, () => { window.location.href = 'https://www.google.com'; });
         }
     });
 
@@ -623,9 +665,16 @@ function updateVideoVisibility(userId, isEnabled) {
 // Signaling
 socket.on('user-connected', (userId) => {
     if (userId === socket.id) return;
+    // Guard contre les doubles connexions (reconnect WebRTC)
+    if (peers[userId]) {
+        peers[userId].close();
+        delete peers[userId];
+        const oldEl = document.getElementById('peer-' + userId);
+        if (oldEl) oldEl.remove();
+    }
     if (allowSoundNotifications && audioUnconvinced) audioUnconvinced.play().catch(e => {});
     createPeerConnection(userId, true);
-    updatePeerUI(userId);
+    updatePeerUI(userId, true);
     if (isModerator) {
         setTimeout(() => {
             const el = document.getElementById(`peer-${userId}`);
@@ -640,7 +689,7 @@ socket.on('signal', (data) => {
     const isNew = !peers[data.from];
     if (isNew) createPeerConnection(data.from, false);
     const pc = peers[data.from];
-    if (isNew) updatePeerUI(data.from);
+    if (isNew) updatePeerUI(data.from, true);
 
     if (data.signal.type === 'offer') {
         pc.setRemoteDescription(new RTCSessionDescription(data.signal))
@@ -696,6 +745,32 @@ function addModBadge(peerElement) {
     peerElement.appendChild(img);
 }
 
+function buildMuteBtn(id, isMini, fs, pad) {
+    const isMuted = mutedPeers.has(id);
+    const btn = document.createElement('button');
+    btn.dataset.modMuteId = id;
+    btn.innerText = isMuted ? (isMini ? 'M' : 'Unmute') : (isMini ? 'M' : 'Mute');
+    btn.style.cssText = `font-size:${fs};padding:${pad};width:auto;height:auto;background:${isMuted ? '#cc0000' : '#22aa44'};color:white;border:none;border-radius:3px;cursor:pointer;`;
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        if (mutedPeers.has(id)) {
+            socket.emit('mod-unmute', id);
+        } else {
+            socket.emit('mod-mute', id);
+        }
+    };
+    return btn;
+}
+
+function syncMuteButtons(id) {
+    const isMuted = mutedPeers.has(id);
+    document.querySelectorAll(`[data-mod-mute-id="${id}"]`).forEach(btn => {
+        const isMini = btn.closest('.miniature') !== null;
+        btn.innerText = isMuted ? (isMini ? 'M' : 'Unmute') : (isMini ? 'M' : 'Mute');
+        btn.style.background = isMuted ? '#cc0000' : '#22aa44';
+    });
+}
+
 function addModButtons(peerElement) {
     if (!isModerator || peerElement.querySelector('.mod-controls')) return;
     if (!peerElement.id || !peerElement.id.startsWith('peer-')) return;
@@ -711,46 +786,28 @@ function addModButtons(peerElement) {
     const makeBtn = (label, bg, action) => {
         const btn = document.createElement('button');
         btn.innerText = label;
-        btn.dataset.action = action;
         btn.style.cssText = `font-size:${fs};padding:${pad};width:auto;height:auto;background:${bg};color:white;border:none;border-radius:3px;cursor:pointer;`;
         btn.onclick = (e) => { e.stopPropagation(); socket.emit(action, id); };
         return btn;
     };
 
-    const muteBtn = document.createElement('button');
-    muteBtn.innerText = isMini ? 'M' : 'Mute';
-    muteBtn.dataset.muted = 'false';
-    muteBtn.style.cssText = `font-size:${fs};padding:${pad};width:auto;height:auto;background:#22aa44;color:white;border:none;border-radius:3px;cursor:pointer;`;
-    muteBtn.onclick = (e) => {
-        e.stopPropagation();
-        const muted = muteBtn.dataset.muted === 'true';
-        if (muted) {
-            socket.emit('mod-unmute', id);
-            muteBtn.dataset.muted = 'false';
-            muteBtn.style.background = '#22aa44';
-            muteBtn.innerText = isMini ? 'M' : 'Mute';
-        } else {
-            socket.emit('mod-mute', id);
-            muteBtn.dataset.muted = 'true';
-            muteBtn.style.background = '#cc0000';
-            muteBtn.innerText = isMini ? 'M' : 'Unmute';
-        }
-    };
-
     modDiv.appendChild(makeBtn(isMini ? 'K' : 'Kick', '#ff8800', 'mod-kick'));
     modDiv.appendChild(makeBtn(isMini ? 'K30' : 'Kick30s', '#ff5500', 'mod-kick-temp'));
     modDiv.appendChild(makeBtn(isMini ? 'B' : 'Ban', '#cc0000', 'mod-ban'));
-    modDiv.appendChild(muteBtn);
+    modDiv.appendChild(buildMuteBtn(id, isMini, fs, pad));
     peerElement.appendChild(modDiv);
 }
 
-function updatePeerUI(userId) {
+function updatePeerUI(userId, forceCreate = false) {
     if (userId === socket.id || userId === 'local') return;
     let peerEl = document.getElementById(`peer-${userId}`);
     const prof = remoteProfiles[userId] || { displayName: 'Guest', profileColor: '#4A90E2' };
     const safeColor = sanitizeColor(prof.profileColor);
 
     if (!peerEl) {
+        // Ne créer l'élément que si forceCreate=true (user-connected/signal)
+        // Sinon (sync-profiles, profile-update) on update juste remoteProfiles
+        if (!forceCreate) return;
         peerEl = document.createElement('div');
         peerEl.id = `peer-${userId}`;
         peerEl.className = 'peer miniature';
@@ -785,8 +842,8 @@ function updatePeerUI(userId) {
         if (!featuredUserId || featuredUserId === 'local') setFeatured(userId);
     } else {
         if (isModerator) addModButtons(peerEl);
-        peerEl.querySelector('.name').innerText = prof.displayName;
-        peerEl.querySelector('.name').style.color = safeColor;
+        const nameEl = peerEl.querySelector('.name');
+        if (nameEl) { nameEl.innerText = prof.displayName; nameEl.style.color = safeColor; }
         peerEl.style.backgroundColor = safeColor;
     }
 
@@ -822,6 +879,7 @@ function setFeatured(idOrTag, streamOverride = null) {
     if (isModerator && idOrTag && idOrTag !== 'local' && idOrTag !== 'local-screen') {
         const id = idOrTag;
         const modDiv = document.createElement('div');
+        modDiv.id = 'featured-mod-controls';
         modDiv.className = 'mod-controls';
         modDiv.style.cssText = 'position:absolute;top:10px;left:10px;display:flex;gap:6px;z-index:10;flex-wrap:wrap;';
         const makeBtn = (label, bg, action) => {
@@ -831,29 +889,10 @@ function setFeatured(idOrTag, streamOverride = null) {
             btn.onclick = (e) => { e.stopPropagation(); socket.emit(action, id); };
             return btn;
         };
-        const muteBtn = document.createElement('button');
-        muteBtn.innerText = 'Mute';
-        muteBtn.dataset.muted = 'false';
-        muteBtn.style.cssText = `font-size:12px;padding:4px 10px;width:auto;height:auto;background:#22aa44;color:white;border:none;border-radius:4px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
-        muteBtn.onclick = (e) => {
-            e.stopPropagation();
-            const muted = muteBtn.dataset.muted === 'true';
-            if (muted) {
-                socket.emit('mod-unmute', id);
-                muteBtn.dataset.muted = 'false';
-                muteBtn.style.background = '#22aa44';
-                muteBtn.innerText = 'Mute';
-            } else {
-                socket.emit('mod-mute', id);
-                muteBtn.dataset.muted = 'true';
-                muteBtn.style.background = '#cc0000';
-                muteBtn.innerText = 'Unmute';
-            }
-        };
         modDiv.appendChild(makeBtn('Kick', '#ff8800', 'mod-kick'));
         modDiv.appendChild(makeBtn('Kick 30s', '#ff5500', 'mod-kick-temp'));
         modDiv.appendChild(makeBtn('Ban', '#cc0000', 'mod-ban'));
-        modDiv.appendChild(muteBtn);
+        modDiv.appendChild(buildMuteBtn(id, false, '12px', '4px 10px'));
         featuredEl.appendChild(modDiv);
     }
 
@@ -1058,7 +1097,11 @@ socket.on('sync-profiles', (profiles) => {
             displayName: prof.displayName || 'Guest',
             profileColor: sanitizeColor(prof.profileColor || '#4A90E2')
         };
-        updatePeerUI(id);
+        // Ne mettre à jour l'UI que si le peer existe déjà dans le DOM
+        // (évite de créer un élément fantôme sans connexion WebRTC)
+        if (document.getElementById('peer-' + id)) {
+            updatePeerUI(id);
+        }
     }
     // Re-apply mod buttons after peers are created (with delay to ensure DOM ready)
     setTimeout(() => {

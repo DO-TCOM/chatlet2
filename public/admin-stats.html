@@ -331,10 +331,33 @@
         let showExtras = false;
         let lastData = null;
 
-        // Remove all login checks - direct access
-        document.getElementById('loginOverlay').style.display = 'none';
-        document.getElementById('dashboard').style.display = 'block';
-        loadData();
+        // Auto-login: si pas de token valide, faire le login automatiquement
+        (async function autoLogin() {
+            if (sessionToken) {
+                // Vérifier si le token existant est encore valide
+                const res = await fetch('/admin/api/data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ token: sessionToken })
+                });
+                if (res.ok) {
+                    const d = await res.json();
+                    if (d.ok) {
+                        document.getElementById('loginOverlay').style.display = 'none';
+                        document.getElementById('dashboard').style.display = 'block';
+                        lastData = d;
+                        renderLogs();
+                        updateConfigUI(d.config);
+                        return;
+                    }
+                }
+                sessionStorage.removeItem('adminToken');
+                sessionToken = '';
+            }
+            // Pas de token valide — afficher le formulaire de login
+            document.getElementById('loginOverlay').style.display = 'flex';
+            document.getElementById('dashboard').style.display = 'none';
+        })();
 
         async function login() {
             const pass = document.getElementById('passInput').value;
