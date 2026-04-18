@@ -665,13 +665,16 @@ function updateVideoVisibility(userId, isEnabled) {
 // Signaling
 socket.on('user-connected', (userId) => {
     if (userId === socket.id) return;
-    // Guard contre les doubles connexions (reconnect WebRTC)
+
+    // Nettoyer l'ancienne connexion si elle existe (même ID)
     if (peers[userId]) {
         peers[userId].close();
         delete peers[userId];
-        const oldEl = document.getElementById('peer-' + userId);
-        if (oldEl) oldEl.remove();
     }
+    // Nettoyer l'élément DOM de cet ID s'il existe
+    const oldEl = document.getElementById('peer-' + userId);
+    if (oldEl) oldEl.remove();
+
     if (allowSoundNotifications && audioUnconvinced) audioUnconvinced.play().catch(e => {});
     createPeerConnection(userId, true);
     updatePeerUI(userId, true);
@@ -680,7 +683,6 @@ socket.on('user-connected', (userId) => {
             const el = document.getElementById(`peer-${userId}`);
             if (el) addModButtons(el);
         }, 200);
-        // Re-broadcast mod badge so new user sees it
         socket.emit('mod-badge', { roomId });
     }
 });
@@ -689,7 +691,9 @@ socket.on('signal', (data) => {
     const isNew = !peers[data.from];
     if (isNew) createPeerConnection(data.from, false);
     const pc = peers[data.from];
-    if (isNew) updatePeerUI(data.from, true);
+    // updatePeerUI avec forceCreate=true si pas encore dans le DOM
+    // (cas où sync-profiles n'a pas encore tourné)
+    if (isNew) updatePeerUI(data.from, !document.getElementById('peer-' + data.from));
 
     if (data.signal.type === 'offer') {
         pc.setRemoteDescription(new RTCSessionDescription(data.signal))
@@ -1097,13 +1101,12 @@ socket.on('sync-profiles', (profiles) => {
             displayName: prof.displayName || 'Guest',
             profileColor: sanitizeColor(prof.profileColor || '#4A90E2')
         };
-        // Ne mettre à jour l'UI que si le peer existe déjà dans le DOM
-        // (évite de créer un élément fantôme sans connexion WebRTC)
-        if (document.getElementById('peer-' + id)) {
-            updatePeerUI(id);
-        }
+        // Créer l'élément DOM immédiatement avec le profil connu —
+        // la vidéo WebRTC s'attachera quand le signal arrivera.
+        // Si l'élément existe déjà, juste mettre à jour les infos.
+        updatePeerUI(id, true);
     }
-    // Re-apply mod buttons after peers are created (with delay to ensure DOM ready)
+    // Re-apply mod buttons
     setTimeout(() => {
         if (isModerator) {
             document.querySelectorAll('.peer.miniature').forEach(peer => addModButtons(peer));
