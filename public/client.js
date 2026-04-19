@@ -52,6 +52,22 @@ const _urlParams = new URLSearchParams(window.location.search);
 const _urlPseudo = _urlParams.get('pseudo');
 const _urlColor = _urlParams.get('color') ? '#' + _urlParams.get('color') : null;
 
+// Lecture token caché dans le hash (#abc123 → profil automatique)
+(async function applyTokenProfile() {
+    const hash = window.location.hash.replace('#', '').trim();
+    if (!hash || hash.length < 8) return;
+    try {
+        const res = await fetch('/api/profile-by-token/' + encodeURIComponent(hash));
+        const data = await res.json();
+        if (data.ok && data.pseudo && data.color) {
+            localStorage.setItem('displayName', data.pseudo);
+            localStorage.setItem('profileColor', '#' + data.color);
+            // Nettoyer le hash de l'URL sans recharger
+            history.replaceState(null, '', window.location.pathname);
+        }
+    } catch (e) {}
+})();
+
 // Check for transferred profile from localStorage (cross-domain)
 let transferredProfile = null;
 let groupProfiles = null;

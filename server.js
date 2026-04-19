@@ -623,6 +623,49 @@ app.post('/api/room-profile', async (req, res) => {
     }
 });
 
+// API pour récupérer un profil par token (lien personnalisé ?t=TOKEN)
+app.get('/api/profile-by-token/:token', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const token = req.params.token;
+    if (!token || token.length > 64) return res.json({ ok: false });
+    try {
+        const tokens = await redisGet('profileTokens', {});
+        const profile = tokens[token];
+        if (!profile || Date.now() - profile.timestamp > 24 * 60 * 60 * 1000) {
+            return res.json({ ok: false });
+        }
+        res.json({ ok: true, pseudo: profile.pseudo, color: profile.color });
+    } catch (e) {
+        res.json({ ok: false });
+    }
+});
+
+// API pour stocker les tokens de profils (appelé par le script chatlet.com)
+app.post('/api/store-profile-tokens', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    const { tokens } = req.body; // [{ token, pseudo, color }]
+    if (!tokens || !Array.isArray(tokens)) return res.json({ ok: false });
+    try {
+        const stored = await redisGet('profileTokens', {});
+        const now = Date.now();
+        for (const t of tokens) {
+            if (!t.token || !t.pseudo || !t.color) continue;
+            stored[t.token] = { pseudo: t.pseudo, color: t.color, timestamp: now };
+        }
+        // Nettoyer les tokens expirés (> 24h)
+        for (const k in stored) {
+            if (now - stored[k].timestamp > 24 * 60 * 60 * 1000) delete stored[k];
+        }
+        await redisSet('profileTokens', stored);
+        log(`[Tokens] ${tokens.length} tokens stockés`);
+        res.json({ ok: true });
+    } catch (e) {
+        res.json({ ok: false });
+    }
+});
+
 // API to get all profiles for a room (called by client on arrival)
 app.get('/api/room-profiles/:room', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
