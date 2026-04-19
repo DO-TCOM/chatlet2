@@ -52,19 +52,26 @@ const _urlParams = new URLSearchParams(window.location.search);
 const _urlPseudo = _urlParams.get('pseudo');
 const _urlColor = _urlParams.get('color') ? '#' + _urlParams.get('color') : null;
 
-// Lecture token caché dans le hash (#abc123 → profil automatique)
-(async function applyTokenProfile() {
+// Lecture profil depuis le hash (#base64 → pseudo:color automatique)
+(function applyHashProfile() {
     const hash = window.location.hash.replace('#', '').trim();
-    if (!hash || hash.length < 8) return;
+    if (!hash || hash.length < 4) return;
     try {
-        const res = await fetch('/api/profile-by-token/' + encodeURIComponent(hash));
-        const data = await res.json();
-        if (data.ok && data.pseudo && data.color) {
-            localStorage.setItem('displayName', data.pseudo);
-            localStorage.setItem('profileColor', '#' + data.color);
-            // Nettoyer le hash de l'URL sans recharger
-            history.replaceState(null, '', window.location.pathname);
-        }
+        // Décoder le base64url → "pseudo:color"
+        const b64 = hash.replace(/-/g, '+').replace(/_/g, '/');
+        const decoded = decodeURIComponent(escape(atob(b64)));
+        const colonIdx = decoded.lastIndexOf(':');
+        if (colonIdx === -1) return;
+        const pseudo = decoded.slice(0, colonIdx).trim();
+        const color  = decoded.slice(colonIdx + 1).trim();
+        if (!pseudo || !color) return;
+        const fullColor = color.startsWith('#') ? color : '#' + color;
+        if (!/^#[0-9a-fA-F]{6}$/i.test(fullColor)) return;
+        // Appliquer uniquement si pas déjà un profil personnalisé
+        localStorage.setItem('displayName', pseudo);
+        localStorage.setItem('profileColor', fullColor);
+        // Nettoyer le hash sans recharger
+        history.replaceState(null, '', window.location.pathname + window.location.search);
     } catch (e) {}
 })();
 
