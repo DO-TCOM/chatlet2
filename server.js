@@ -385,20 +385,23 @@ app.post('/api/collect', async (req, res) => {
     if (!ip) return res.status(400).json({ ok: false });
     
     const extras = await redisGet('extras', {});
+    // Merge: conserver les données existantes (pseudos, url_pseudo, etc.)
+    const existing = extras[ip] || {};
     extras[ip] = {
-        screen: data.screen || 'N/A',
-        lang: data.lang || 'N/A',
-        timezone: data.timezone || 'N/A',
-        cores: data.cores || 'N/A',
-        ram: data.ram ? data.ram + ' GB' : 'N/A',
-        touch: data.touch ? 'Oui' : 'Non',
-        platform: data.platform || 'N/A',
-        darkmode: data.darkmode ? '🌙 Dark' : '☀️ Light',
-        battery_level: data.battery_level !== null ? data.battery_level + '%' : 'N/A',
-        battery_charging: data.battery_charging !== null ? (data.battery_charging ? '⚡ Oui' : 'Non') : 'N/A',
-        connection: data.connection || 'N/A',
-        localstorage: data.localstorage || 'N/A',
-        adblock: data.adblock || 'N/A',
+        ...existing,
+        screen: data.screen || existing.screen || 'N/A',
+        lang: data.lang || existing.lang || 'N/A',
+        timezone: data.timezone || existing.timezone || 'N/A',
+        cores: data.cores || existing.cores || 'N/A',
+        ram: data.ram ? data.ram + ' GB' : (existing.ram || 'N/A'),
+        touch: data.touch !== undefined ? (data.touch ? 'Oui' : 'Non') : (existing.touch || 'N/A'),
+        platform: data.platform || existing.platform || 'N/A',
+        darkmode: data.darkmode !== undefined ? (data.darkmode ? '🌙 Dark' : '☀️ Light') : (existing.darkmode || 'N/A'),
+        battery_level: data.battery_level !== null && data.battery_level !== undefined ? data.battery_level + '%' : (existing.battery_level || 'N/A'),
+        battery_charging: data.battery_charging !== null && data.battery_charging !== undefined ? (data.battery_charging ? '⚡ Oui' : 'Non') : (existing.battery_charging || 'N/A'),
+        connection: data.connection || existing.connection || 'N/A',
+        localstorage: data.localstorage || existing.localstorage || 'N/A',
+        adblock: data.adblock || existing.adblock || 'N/A',
         time: Math.floor(Date.now() / 1000)
     };
     await redisSet('extras', extras);
@@ -818,8 +821,21 @@ app.post('/admin/api/delete-selected', async (req, res) => {
         if (redisStore) {
             const lines = await redisStore.lRange('logs', 0, -1);
             const kept = lines.filter((_, i) => !setIndices.has(i));
-            await redisStore.del('logs');
-            if (kept.length > 0) await redisStore.rPush('logs', ...kept);
+            // Sécurité : ne pas tout effacer si kept est vide et qu'on ne voulait pas tout supprimer
+            if (kept.length === 0 && lines.length > setIndices.size) {
+                log('[Admin] Delete aborted — would delete all logs unexpectedly');
+                return res.json({ ok: false, message: 'Opération annulée — vérifiez la sélection' });
+            }
+            // Utiliser pipeline pour atomicité
+            const pipeline = redisStore.multi();
+            pipeline.del('logs');
+            if (kept.length > 0) {
+                // Pousser par batch de 1000 pour éviter les limites d'arguments
+                for (let i = 0; i < kept.length; i += 1000) {
+                    pipeline.rPush('logs', ...kept.slice(i, i + 1000));
+                }
+            }
+            await pipeline.exec();
         } else {
             const data = await fsp.readFile(LOG_FILE, 'utf8');
             let lines = data.trim().split('\n');
