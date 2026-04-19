@@ -892,10 +892,17 @@ io.on('connection', (socket) => {
     ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
     : socket.handshake.address;
 
-  // Check blacklist async
+  // Check bannedIps (temp kick 30s)
+  if (bannedIps.has(clientIp)) {
+    socket.emit('mod-action', { type: 'kicked-temp', by: 'OvO' });
+    socket.disconnect(true);
+    return;
+  }
+
+  // Check blacklist (ban permanent)
   redisGet('blacklist', []).then(blacklist => {
     if (blacklist.find(r => r.ip === clientIp && r.blocked)) {
-      socket.emit('mod-action', 'banned');
+      socket.emit('mod-action', { type: 'banned', by: 'OvO' });
       socket.disconnect(true);
     }
   }).catch(() => {});

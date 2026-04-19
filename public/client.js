@@ -745,31 +745,38 @@ function flushCandidateQueue(pc) {
 }
 
 function showModOverlay(message, callback, autoDismiss = false) {
+    if (autoDismiss) {
+        // Pour mute/unmute : toast discret en bas, pas d'overlay plein écran
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#ff4444;font-size:1rem;font-weight:bold;padding:10px 24px;border-radius:8px;z-index:9999;font-family:sans-serif;';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+        return;
+    }
+    // Pour kick/ban : overlay plein écran
     const overlay = document.createElement('div');
-    overlay.style.cssText = `
-        position:fixed;inset:0;background:rgba(0,0,0,0.85);
-        display:flex;flex-direction:column;align-items:center;justify-content:center;
-        z-index:9999;font-family:sans-serif;
-    `;
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;font-family:sans-serif;';
     const msgEl = document.createElement('div');
     msgEl.style.cssText = 'color:#ff4444;font-size:2.5rem;font-weight:bold;letter-spacing:0.1em;margin-bottom:1rem;';
-    msgEl.textContent = message; // textContent — never innerHTML — avoids XSS
+    msgEl.textContent = message;
     overlay.appendChild(msgEl);
     document.body.appendChild(overlay);
-    if (autoDismiss) {
-        setTimeout(() => overlay.remove(), 2000);
-    } else {
-        setTimeout(callback, 2500);
-    }
+    setTimeout(callback, 2500);
 }
 
 function addModBadge(peerElement) {
     if (!peerElement || peerElement.querySelector('.mod-badge')) return;
-    const img = document.createElement('img');
-    img.src = '/mod-badge.png';
-    img.className = 'mod-badge';
-    img.title = 'Moderator';
-    peerElement.appendChild(img);
+    const badge = document.createElement('div');
+    badge.className = 'mod-badge';
+    badge.title = 'Moderator';
+    badge.style.cssText = 'position:absolute;bottom:4px;right:4px;width:28px;height:28px;z-index:10;';
+    badge.innerHTML = `<svg viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+        <polygon points="14,2 25,8 25,20 14,26 3,20 3,8" fill="#8B4513" stroke="#6B3010" stroke-width="1"/>
+        <polygon points="14,4 23,9.5 23,18.5 14,24 5,18.5 5,9.5" fill="#A0522D"/>
+        <text x="14" y="17" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="bold" fill="#FFD700" letter-spacing="0.5">MOD</text>
+    </svg>`;
+    peerElement.appendChild(badge);
 }
 
 function buildMuteBtn(id, isMini, fs, pad) {
