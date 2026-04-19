@@ -816,6 +816,7 @@ function updatePeerUI(userId, forceCreate = false) {
         peerEl.id = `peer-${userId}`;
         peerEl.className = 'peer miniature';
         peerEl.style.backgroundColor = safeColor;
+        peerEl.dataset.createdAt = Date.now();
         peerEl.innerHTML = `
             <video class="video" autoplay playsinline disablepictureinpicture></video>
             <div class="name" style="color: ${safeColor}">${escapeHTML(prof.displayName)}</div>
@@ -939,6 +940,35 @@ socket.on('user-disconnected', (userId) => {
         }
     }
 });
+
+// Nettoyage périodique des avatars fantômes
+// (peers dans le DOM mais dont la connexion WebRTC est fermée/absente)
+setInterval(() => {
+    document.querySelectorAll('.peer.miniature').forEach(el => {
+        const id = el.id.replace('peer-', '');
+        if (!id) return;
+        const pc = peers[id];
+        // Si pas de connexion WebRTC ou connexion fermée → supprimer
+        if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+            // Vérifier que ce n'est pas un peer qui vient juste d'arriver (< 5s)
+            const createdAt = parseInt(el.dataset.createdAt || '0');
+            if (Date.now() - createdAt > 5000) {
+                el.remove();
+                delete remoteProfiles[id];
+                delete peers[id];
+                if (featuredUserId === id) {
+                    const remaining = Object.keys(peers);
+                    featuredUserId = remaining[0] || null;
+                    if (featuredUserId) setFeatured(featuredUserId);
+                    else {
+                        const featuredEl = document.querySelector('.peer.featured');
+                        if (featuredEl) featuredEl.classList.add('hidden');
+                    }
+                }
+            }
+        }
+    });
+}, 4000);
 
 function createPeerConnection(userId, isInitiator) {
     const pc = new RTCPeerConnection({ iceServers: iceServersConfig });

@@ -253,7 +253,9 @@ const io = socketIo(server, {
             }
         },
         methods: ['GET', 'POST']
-    }
+    },
+    pingTimeout: 10000,   // 10s sans réponse → déconnecté
+    pingInterval: 5000,   // ping toutes les 5s
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1162,6 +1164,16 @@ io.on('connection', (socket) => {
     // Notifier le mod que le unmute a été appliqué → sync boutons
     socket.emit('mod-mute-ack', { targetId, muted: false });
     log(`[Socket] Moderator ${socket.id} unmuted ${targetId}`);
+  });
+
+  // ── Déconnexion (fermeture onglet, timeout, kick) ─────────────────────────
+  socket.on('disconnect', (reason) => {
+    const roomId = socket.data.roomId;
+    if (roomId) {
+      // Notifier tous les membres de la room
+      socket.to(roomId).emit('user-disconnected', socket.id);
+      log(`[Socket] User ${socket.id} disconnected from room ${roomId} (${reason})`);
+    }
   });
 });
 
