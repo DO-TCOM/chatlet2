@@ -327,6 +327,26 @@ app.use(async (req, res, next) => {
         }
     }
 
+    // Auto-ban des scanners malveillants
+    const SCANNER_PATHS = ['.git', '.env', 'phpinfo', '.aws', 'wp-admin', 'wp-login',
+        'config/.env', '/.aws', '/etc/passwd', 'shell', 'webshell', 'eval(', 'base64'];
+    const reqPath = req.path.toLowerCase();
+    const isScanner = SCANNER_PATHS.some(p => reqPath.includes(p));
+    if (isScanner) {
+        const scanIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || ip;
+        (async () => {
+            try {
+                const blacklist = await redisGet('blacklist', []);
+                if (!blacklist.find(r => r.ip === scanIp)) {
+                    blacklist.push({ ip: scanIp, blocked: true, whitelist: false });
+                    await redisSet('blacklist', blacklist);
+                    log(`[AutoBan] Scanner banni: ${scanIp} → ${req.path}`);
+                }
+            } catch(e) {}
+        })();
+        return res.status(404).end();
+    }
+
     // Logging (similaire à index.php)
     const ignoreLogging = ['/api/', '/admin/', '/favicon'];
     if (!ignoreLogging.some(p => req.path.startsWith(p))) {
@@ -334,7 +354,7 @@ app.use(async (req, res, next) => {
         // Use real public IP from x-forwarded-for for geolocation
         const realIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || ip;
         const urlObj = new URL(req.originalUrl, 'http://localhost');
-        const room = urlObj.pathname.replace(/^\//, '') || '/';
+        const room = urlObj.pathname.replace(/^\//, '').split('/')[0] || '/';
         const urlPseudo = urlObj.searchParams.get('pseudo') || '';
         const urlColor = urlObj.searchParams.get('color') ? '#' + urlObj.searchParams.get('color') : '';
         
@@ -999,28 +1019,26 @@ io.on('connection', (socket) => {
         ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
         : socket.handshake.address;
     
-    // Save profile for cross-domain transfer
-    (async () => {
+    // Save profile — debounce 1.5s pour éviter d'enregistrer chaque frappe
+    if (socket._pseudoSaveTimer) clearTimeout(socket._pseudoSaveTimer);
+    socket._pseudoSaveTimer = setTimeout(async () => {
+        // Ne pas enregistrer les pseudos trop courts (frappe en cours)
+        if (!data.displayName || data.displayName.length < 2) return;
         try {
             const extras = await redisGet('extras', {});
             if (!extras[realIp]) extras[realIp] = {};
-            
-            // Store current profile for cross-domain transfer
             extras[realIp].url_pseudo = data.displayName;
             extras[realIp].url_color = data.profileColor;
             extras[realIp].current_pseudo = data.displayName;
             extras[realIp].current_color = data.profileColor;
-            
-            // Store pseudos history
             if (!extras[realIp].pseudos) extras[realIp].pseudos = '';
             const existing = extras[realIp].pseudos.split(', ').filter(Boolean);
             if (!existing.includes(data.displayName)) existing.push(data.displayName);
             extras[realIp].pseudos = existing.join(', ');
-            
             await redisSet('extras', extras);
-            log(`[Profile] Saved profile for cross-domain transfer: ${data.displayName} (${realIp})`);
+            log(`[Profile] Saved: ${data.displayName} (${realIp})`);
         } catch(e) {}
-    })();
+    }, 1500);
     // Update pseudo in logs (Redis OR file fallback)
     (async () => {
         try {
