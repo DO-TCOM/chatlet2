@@ -24,6 +24,18 @@ const roomId = window.location.pathname.split('/').pop() || 'friends';
 
 // Re-auth as mod on reconnect
 socket.on('reconnect', () => {
+    // Fermer toutes les connexions WebRTC existantes
+    for (const id in peers) {
+        try { peers[id].close(); } catch(e) {}
+        delete peers[id];
+    }
+    // Supprimer tous les éléments DOM des peers distants
+    document.querySelectorAll('.peer.miniature').forEach(el => el.remove());
+    Object.keys(remoteProfiles).forEach(k => delete remoteProfiles[k]);
+    featuredUserId = null;
+    const featuredEl = document.querySelector('.peer.featured');
+    if (featuredEl) featuredEl.classList.add('hidden');
+
     const modSecret = localStorage.getItem('modSecret');
     if (modSecret) setTimeout(() => socket.emit('mod-auth', { password: modSecret, displayName: myDisplayName }), 500);
     if (roomId) {
@@ -978,22 +990,24 @@ setInterval(() => {
         const id = el.id.replace('peer-', '');
         if (!id) return;
         const pc = peers[id];
-        // Si pas de connexion WebRTC ou connexion fermée → supprimer
-        if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
-            // Vérifier que ce n'est pas un peer qui vient juste d'arriver (< 5s)
-            const createdAt = parseInt(el.dataset.createdAt || '0');
-            if (Date.now() - createdAt > 5000) {
-                el.remove();
-                delete remoteProfiles[id];
-                delete peers[id];
-                if (featuredUserId === id) {
-                    const remaining = Object.keys(peers);
-                    featuredUserId = remaining[0] || null;
-                    if (featuredUserId) setFeatured(featuredUserId);
-                    else {
-                        const featuredEl = document.querySelector('.peer.featured');
-                        if (featuredEl) featuredEl.classList.add('hidden');
-                    }
+        const createdAt = parseInt(el.dataset.createdAt || '0');
+        const age = Date.now() - createdAt;
+        // Supprimer seulement si : pas de PC, ou connexion définitivement fermée/échouée
+        // ET assez ancien (15s) pour ne pas supprimer une connexion en cours d'établissement
+        const isDead = !pc || pc.connectionState === 'closed' ||
+                       (pc.connectionState === 'failed' && age > 15000);
+        if (isDead && age > 15000) {
+            el.remove();
+            delete remoteProfiles[id];
+            if (pc) { try { pc.close(); } catch(e) {} }
+            delete peers[id];
+            if (featuredUserId === id) {
+                const remaining = Object.keys(peers);
+                featuredUserId = remaining[0] || null;
+                if (featuredUserId) setFeatured(featuredUserId);
+                else {
+                    const featuredEl = document.querySelector('.peer.featured');
+                    if (featuredEl) featuredEl.classList.add('hidden');
                 }
             }
         }
@@ -1011,10 +1025,44 @@ function createPeerConnection(userId, isInitiator) {
     pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { to: userId, signal: { candidate: e.candidate } }); };
 
     pc.ontrack = (e) => {
-        e.streams[0].getTracks().forEach(track => pc.remoteStream.addTrack(track));
-        const peerEl = document.getElementById(`peer-${userId}`);
-        if (peerEl) peerEl.querySelector('video').srcObject = pc.remoteStream;
+        e.streams[0].getTracks().forEach(track => {
+            // Éviter les doublons de tracks
+            if (!pc.remoteStream.getTracks().find(t => t.id === track.id)) {
+                pc.remoteStream.addTrack(track);
+            }
+        });
+        // Attacher le stream à l'élément vidéo — créer l'élément si nécessaire
+        let peerEl = document.getElementById(`peer-${userId}`);
+        if (!peerEl) {
+            updatePeerUI(userId, true);
+            peerEl = document.getElementById(`peer-${userId}`);
+        }
+        if (peerEl) {
+            const videoEl = peerEl.querySelector('video');
+            if (videoEl && videoEl.srcObject !== pc.remoteStream) {
+                videoEl.srcObject = pc.remoteStream;
+            }
+        }
         if (featuredUserId === userId) setFeatured(userId);
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed') {
+            // Tentative de redémarrage ICE
+            if (pc._isInitiator && pc.restartIce) {
+                pc.restartIce();
+            }
+        }
+        if (pc.connectionState === 'connected') {
+            // S'assurer que le stream est bien attaché
+            const peerEl = document.getElementById(`peer-${userId}`);
+            if (peerEl && pc.remoteStream.getTracks().length > 0) {
+                const videoEl = peerEl.querySelector('video');
+                if (videoEl && videoEl.srcObject !== pc.remoteStream) {
+                    videoEl.srcObject = pc.remoteStream;
+                }
+            }
+        }
     };
 
     pc.onnegotiationneeded = async () => {
