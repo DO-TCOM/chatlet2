@@ -543,7 +543,7 @@
                     <td class="lettre-big profile-trigger" data-ip="${g.ip}" style='cursor:pointer;'>${g.letter}${g.count > 1 ? `<span class="count">${g.count}x</span>` : ''}</td>
                     <td class="ip-cell profile-trigger" data-ip="${g.ip}" style='cursor:pointer;text-decoration:underline;'>${g.ip}</td>
                     <td>${g.city}<br><small style="color:#888">${g.country}</small></td>
-                    <td class="pseudo">${extra.pseudos ? extra.pseudos.split(', ').filter(Boolean).map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${extra.url_color||'#888'};margin-right:4px;vertical-align:middle;'></span>${p}</div>`).join('') : '<span style="color:#555;font-size:11px">—</span>'}</td>
+                    <td class="pseudo">${(() => { const all = extra.pseudos ? extra.pseudos.split(', ').filter(Boolean) : []; const last3 = all.slice(-3); const rest = all.length - 3; return last3.length ? last3.map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${extra.url_color||'#888'};margin-right:4px;vertical-align:middle;'></span>${p}</div>`).join('') + (rest > 0 ? `<div style='color:#888;font-size:10px'>+${rest} autres</div>` : '') : '<span style="color:#555;font-size:11px">—</span>'; })()}</td>
                     <td style="font-size:11px; white-space:nowrap;">${g.date}</td>
                     <td style="text-align:center">${g.browser}</td>
                     <td class="vpn-badge">${g.vpn ? '🔒' : ''}</td>
