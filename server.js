@@ -303,7 +303,7 @@ const adminLoginLimiter = rateLimit({
 app.use(express.json());
 
 // Preflight CORS pour les requêtes cross-origin (chatlet.com → chaltet.com)
-app.options('*', (req, res) => {
+app.options('(.*)', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
