@@ -452,7 +452,8 @@
             }).flat();
             
             if (selected.length === 0) return alert('Aucune ligne sélectionnée');
-            if (!confirm(`Supprimer les ${selected.length} lignes correspondantes ?`)) return;
+            const uniqueIps = new Set(Array.from(document.querySelectorAll('.line-cb:checked')).map(cb => cb.closest('tr').querySelector('.ip-cell').textContent.trim()));
+            if (!confirm(`Supprimer ${uniqueIps.size} IP(s) — ${selected.length} ligne(s) de logs ?`)) return;
 
             await fetch('/admin/api/delete-selected', {
                 method: 'POST',
@@ -488,25 +489,31 @@
             const data = lastData;
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
             const body = document.getElementById('logsBody');
-            const lines = data.logs.trim().split('\n').filter(l => l.includes('IP:'));
+            // Garder toutes les lignes avec leurs vrais indices Redis
+            const allLines = data.logs ? data.logs.split('\n') : [];
             
-            // Group by IP (Matching PHP logic)
+            // Group by IP — indices = vrais indices dans allLines (pour delete correct)
             const groups = {};
-            lines.forEach((line, index) => {
-                const m = line.match(/\[([^\]]+)\] IP: ([^\s|]+) \| ([^|]+) \| ([^(]+)\(([^)]+)\) \| ([^|]*) \| [^|]* \| ([^|]+) \| (.+)/);
-                if (m) {
-                    const ip = m[2];
-                    if (!groups[ip]) groups[ip] = {
-                        ip, date: m[1].trim(), letter: m[3].trim(), city: m[4].trim(), country: m[5].trim(), vpn: m[6].includes('VPN'), 
-                        browser: m[7].trim(), rooms: new Set(), count: 0, indices: []
-                    };
-                    groups[ip].count++;
-                    groups[ip].rooms.add(m[8].trim());
-                    groups[ip].indices.push(index);
-                    if (new Date(m[1]) > new Date(groups[ip].date)) {
-                        groups[ip].date = m[1];
-                        groups[ip].browser = m[7];
-                    }
+            allLines.forEach((line, realIndex) => {
+                if (!line.includes('IP:')) return;
+                const m = line.match(/\[([^\]]+)\] IP: ([^\s|]+) \| ([^|]+) \| ([^(]+)\(([^)]+)\) \| ([^|]*) \| ([^|]*) \| ([^|]+) \| (.+)/);
+                if (!m) return;
+                const ip = m[2].trim();
+                const note = m[7].trim();
+                const browser = m[8].trim();
+                const room = m[9].trim();
+                if (!groups[ip]) groups[ip] = {
+                    ip, date: m[1].trim(), letter: m[3].trim(),
+                    city: m[4].trim(), country: m[5].trim(),
+                    vpn: m[6].includes('VPN'),
+                    browser, rooms: new Set(), count: 0, indices: []
+                };
+                groups[ip].count++;
+                if (room && room !== 'REDIRECT_CHECK') groups[ip].rooms.add(room);
+                groups[ip].indices.push(realIndex);
+                if (new Date(m[1]) > new Date(groups[ip].date)) {
+                    groups[ip].date = m[1].trim();
+                    groups[ip].browser = browser;
                 }
             });
 
@@ -520,7 +527,8 @@
                 })
                 .sort((a,b) => new Date(b.date) - new Date(a.date));
             
-            document.getElementById('logCount').textContent = lines.length;
+            const ipLines = allLines.filter(l => l.includes('IP:'));
+            document.getElementById('logCount').textContent = ipLines.length;
             document.getElementById('ipCount').textContent = sorted.length;
 
             body.innerHTML = sorted.map(g => {
@@ -535,7 +543,7 @@
                     <td class="lettre-big profile-trigger" data-ip="${g.ip}" style='cursor:pointer;'>${g.letter}${g.count > 1 ? `<span class="count">${g.count}x</span>` : ''}</td>
                     <td class="ip-cell profile-trigger" data-ip="${g.ip}" style='cursor:pointer;text-decoration:underline;'>${g.ip}</td>
                     <td>${g.city}<br><small style="color:#888">${g.country}</small></td>
-                    <td class="pseudo">${extra.pseudos ? extra.pseudos.split(', ').map(p => `<div>${extra.url_color ? `<span style='display:inline-block;width:10px;height:10px;border-radius:50%;background:${extra.url_color};margin-right:4px;vertical-align:middle;'></span>` : ''}${p}</div>`).join('') : Array.from(g.rooms).map(p => `<div>/${p}</div>`).join('')}</td>
+                    <td class="pseudo">${extra.pseudos ? extra.pseudos.split(', ').filter(Boolean).map(p => `<div><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${extra.url_color||'#888'};margin-right:4px;vertical-align:middle;'></span>${p}</div>`).join('') : '<span style="color:#555;font-size:11px">—</span>'}</td>
                     <td style="font-size:11px; white-space:nowrap;">${g.date}</td>
                     <td style="text-align:center">${g.browser}</td>
                     <td class="vpn-badge">${g.vpn ? '🔒' : ''}</td>
