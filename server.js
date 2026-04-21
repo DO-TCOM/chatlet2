@@ -302,6 +302,14 @@ const adminLoginLimiter = rateLimit({
 
 app.use(express.json());
 
+// Preflight CORS pour les requêtes cross-origin (chatlet.com → chaltet.com)
+app.options('*', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(204).end();
+});
+
 app.use(async (req, res, next) => {
     // Skip static assets filters to avoid overhead
     const ext = path.extname(req.path);
@@ -686,6 +694,34 @@ app.post('/api/store-profile-tokens', async (req, res) => {
         res.json({ ok: true });
     } catch (e) {
         res.json({ ok: false });
+    }
+});
+
+// URL shortener simple (pour le panel admin)
+app.post('/api/shorten', async (req, res) => {
+    if (!authTokens.has(req.body?.token)) return res.status(401).json({ ok: false });
+    const { url } = req.body;
+    if (!url || typeof url !== 'string') return res.json({ ok: false });
+    try {
+        const token = Math.random().toString(36).slice(2, 9);
+        const shorts = await redisGet('shortUrls', {});
+        shorts[token] = { url, created: Date.now() };
+        await redisSet('shortUrls', shorts);
+        res.json({ ok: true, short: 'https://chaltet.com/s/' + token });
+    } catch(e) {
+        res.json({ ok: false });
+    }
+});
+
+// Redirect short URLs
+app.get('/s/:token', async (req, res) => {
+    try {
+        const shorts = await redisGet('shortUrls', {});
+        const entry = shorts[req.params.token];
+        if (!entry) return res.status(404).end();
+        res.redirect(302, entry.url);
+    } catch(e) {
+        res.status(500).end();
     }
 });
 
@@ -1126,6 +1162,15 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('url-identity', (data) => {
+    if (!data || typeof data.pseudo !== 'string') return;
+    const pseudo = data.pseudo.substring(0, 50);
+    const color = data.color || '';
+    if (!socket.data.profile) socket.data.profile = {};
+    if (!socket.data.profile.displayName) socket.data.profile.displayName = pseudo;
+    if (!socket.data.profile.profileColor && /^#[0-9a-fA-F]{6}$/.test(color)) socket.data.profile.profileColor = color;
+  });
+
   socket.on('signal', (data) => {
     if (!data || typeof data.to !== 'string' || !data.signal) return;
     const senderRoom = socket.data.roomId;
@@ -1135,6 +1180,12 @@ io.on('connection', (socket) => {
     if (targetSocket && targetSocket.data.roomId !== senderRoom) return;
     log(`[Socket] Signal from ${socket.id} to ${data.to} (${data.signal.type || 'ICE'})`);
     io.to(data.to).emit('signal', { from: socket.id, signal: data.signal });
+  });
+
+  socket.on('mod-badge', (data) => {
+    const roomId = socket.data.roomId;
+    if (!roomId || !socket.data.isMod) return;
+    socket.to(roomId).emit('mod-badge', { id: socket.id });
   });
 
   socket.on('mod-auth', (data) => {

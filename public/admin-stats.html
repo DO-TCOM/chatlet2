@@ -425,11 +425,11 @@
             loadData();
         }
 
-        async function toggleStatus(ip, field, currentVal) {
+        async function toggleStatus(ip, field, newValue) {
             await fetch('/admin/api/toggle', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ token: sessionToken, ip, field, value: !currentVal })
+                body: JSON.stringify({ token: sessionToken, ip, field, value: newValue })
             });
             loadData();
         }
@@ -493,7 +493,7 @@
             // Group by IP (Matching PHP logic)
             const groups = {};
             lines.forEach((line, index) => {
-                const m = line.match(/\[([^\]]+)\] IP: ([\d\.\:]+) \| ([^\|]+) \| ([^\(]+)\(([^\)]+)\) \| ([^\|]*) \| [^\|]* \| ([^\|]+) \| (.+)/);
+                const m = line.match(/\[([^\]]+)\] IP: ([^\s|]+) \| ([^|]+) \| ([^(]+)\(([^)]+)\) \| ([^|]*) \| [^|]* \| ([^|]+) \| (.+)/);
                 if (m) {
                     const ip = m[2];
                     if (!groups[ip]) groups[ip] = {
@@ -573,6 +573,8 @@
         document.getElementById('saveRedirBtn').addEventListener('click', saveRedir);
         document.getElementById('toggleExtra').addEventListener('change', toggleDetailed);
         document.getElementById('refreshBtn').addEventListener('click', loadData);
+        // Auto-refresh toutes les 30s
+        setInterval(loadData, 30000);
         document.getElementById('searchInput').addEventListener('input', renderLogs);
         document.getElementById('selectAll').addEventListener('change', (e) => {
             document.querySelectorAll('.line-cb').forEach(cb => cb.checked = e.target.checked);
@@ -661,8 +663,8 @@
         document.getElementById('logsBody').addEventListener('click', (e) => {
             if (e.target.classList.contains('cb-block') || e.target.classList.contains('cb-white')) {
                 const { ip, field } = e.target.dataset;
-                const value = e.target.checked;
-                toggleStatus(ip, field, !value);
+                const value = e.target.checked; // true = coché = bloquer/whitelister
+                toggleStatus(ip, field, value);
             }
             const trigger = e.target.closest('.profile-trigger');
             if (trigger) {
