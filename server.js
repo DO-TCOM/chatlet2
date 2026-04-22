@@ -203,8 +203,17 @@ async function isVPNviaIPHub(ip) {
 
 async function getLocation(ip) {
     try {
+        if (redisStore) {
+            const cached = await redisStore.hGet('location_cache', ip);
+            if (cached) return JSON.parse(cached);
+        }
         const data = await fetchJson(`http://ip-api.com/json/${ip}?fields=status,message,country,city`);
-        return { city: data.city || 'N/A', country: data.country || 'N/A' };
+        const loc = { city: data.city || 'N/A', country: data.country || 'N/A' };
+        if (redisStore && data.status === 'success') {
+            await redisStore.hSet('location_cache', ip, JSON.stringify(loc));
+            // Expire cache after 7 days to keep it fresh
+        }
+        return loc;
     } catch (e) {
         return { city: 'N/A', country: 'N/A' };
     }
@@ -725,9 +734,9 @@ app.post('/api/shorten', async (req, res) => {
     if (!url || typeof url !== 'string') return res.json({ ok: false });
     try {
         const token = Math.random().toString(36).slice(2, 9);
-        const shorts = await redisGet('shortUrls', {});
-        shorts[token] = { url, created: Date.now() };
-        await redisSet('shortUrls', shorts);
+        if (redisStore) {
+            await redisStore.hSet('short_urls', token, JSON.stringify({ url, created: Date.now() }));
+        }
         res.json({ ok: true, short: 'https://chaltet.com/s/' + token });
     } catch(e) {
         res.json({ ok: false });
@@ -737,10 +746,13 @@ app.post('/api/shorten', async (req, res) => {
 // Redirect short URLs
 app.get('/s/:token', async (req, res) => {
     try {
-        const shorts = await redisGet('shortUrls', {});
-        const entry = shorts[req.params.token];
-        if (!entry) return res.status(404).end();
-        res.redirect(302, entry.url);
+        if (redisStore) {
+            const data = await redisStore.hGet('short_urls', req.params.token);
+            if (!data) return res.status(404).end();
+            const entry = JSON.parse(data);
+            return res.redirect(302, entry.url);
+        }
+        res.status(404).end();
     } catch(e) {
         res.status(500).end();
     }
@@ -804,11 +816,18 @@ app.get('/admin/check-token', (req, res) => {
     const adminToken = req.headers['x-admin-token'] || req.query.admin_token;
     const expectedToken = process.env.ADMIN_TOKEN || 'admin_access_2024';
     
-    res.json({ hasToken: adminToken === expectedToken });
+app.get('/admin/stats', (req, res) => {
+    // Require a valid admin token in cookie or query to even see the dashboard file
+    const adminToken = req.query.admin_token;
+    const expectedToken = process.env.ADMIN_TOKEN || 'admin_access_2024';
+    if (adminToken !== expectedToken) return res.status(403).send('Forbidden: Access Restricted');
+    
+    res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
 });
 
-app.get('/admin/stats', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
+// Protect the static manifest and direct access
+app.get('/admin-stats.html', (req, res) => {
+    res.status(403).send('Private Route: use /admin/stats');
 });
 
 
@@ -955,13 +974,16 @@ io.on('connection', (socket) => {
     return;
   }
 
-  // Check blacklist (ban permanent)
-  redisGet('blacklist', []).then(blacklist => {
+  // Check blacklist (ban permanent) - Synchronous block to prevent unauthorized data access
+  try {
+    const blacklist = await redisGet('blacklist', []);
     if (blacklist.find(r => r.ip === clientIp && r.blocked)) {
       socket.emit('mod-action', { type: 'banned', by: 'OvO' });
       socket.disconnect(true);
+      return;
     }
-  }).catch(() => {});
+  } catch (e) { log('Blacklist check error:', e.message); }
+  
   log(`[Socket] New connection: ${socket.id}`);
 
 
@@ -1150,11 +1172,10 @@ io.on('connection', (socket) => {
     if (!data || typeof data.to !== 'string' || !data.signal) return;
     const senderRoom = socket.data.roomId;
     if (!senderRoom) return;
-    // Best-effort local room check (works single instance + Redis single node)
-    const targetSocket = io.sockets.sockets.get(data.to);
-    if (targetSocket && targetSocket.data.roomId !== senderRoom) return;
+    
+    // Broadcast signal only if recipient is in the same room (works across nodes/clusters)
+    socket.to(senderRoom).to(data.to).emit('signal', { from: socket.id, signal: data.signal });
     log(`[Socket] Signal from ${socket.id} to ${data.to} (${data.signal.type || 'ICE'})`);
-    io.to(data.to).emit('signal', { from: socket.id, signal: data.signal });
   });
 
   socket.on('mod-badge', (data) => {
