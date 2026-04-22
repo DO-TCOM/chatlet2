@@ -1086,46 +1086,7 @@ io.on('connection', (socket) => {
         } catch(e) {}
     }, 1500);
     // Update pseudo in logs (Redis OR file fallback)
-    (async () => {
-        try {
-            const names = socket.data.pseudos || new Set();
-            names.add(data.displayName);
-            socket.data.pseudos = names;
-            const pseudoStr = Array.from(new Set(Array.from(names))).join(', ');
-
-            if (redisStore) {
-                // Update pseudo in Redis log list
-                const lines = await redisStore.lRange('logs', 0, -1);
-                const updated = lines.map(line => {
-                    if (line.includes(`IP: ${realIp}`)) {
-                        const parts = line.split(' | ');
-                        if (parts.length >= 5) {
-                            parts[4] = pseudoStr;
-                            return parts.join(' | ');
-                        }
-                    }
-                    return line;
-                });
-                await redisStore.del('logs');
-                if (updated.length > 0) await redisStore.rPush('logs', ...updated);
-            } else {
-                // Fallback: update in file
-                const logData = await fsp.readFile(LOG_FILE, 'utf8');
-                const lines = logData.split('\n');
-                const updated = lines.map(line => {
-                    if (line.includes(`IP: ${realIp}`)) {
-                        const parts = line.split(' | ');
-                        if (parts.length >= 5) {
-                            parts[4] = pseudoStr;
-                            return parts.join(' | ');
-                        }
-                    }
-                    return line;
-                });
-                await fsp.writeFile(LOG_FILE, updated.join('\n'), 'utf8');
-            }
-        } catch (e) { log('Error updating pseudo in logs:', e.message); }
-    })();
+    // Removed pseudo log update block – frontend does not rely on log pseudo data.
   });
 
   socket.on('peer-speaking', (data) => {
