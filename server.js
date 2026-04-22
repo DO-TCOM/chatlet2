@@ -201,31 +201,28 @@ async function getTailLogs(file, maxLines = 5000) {
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 async function getLetterForIP(ip) {
-    const data = await redisGetLogs(3000); // Read more for letter consistency
-    const logs = data.split('\n');
+    if (!redisStore) return alphabet[0];
     
-    for (const line of logs) {
-        const match = line.match(/IP:\s*([\d\.\:]+)\s*\|\s*([A-Z]{1,2})/);
-        if (match && match[1] === ip) return match[2];
-    }
-    
-    const usedLetters = new Set();
-    for (const line of logs) {
-        const match = line.match(/\|\s*([A-Z]{1,2})\s*\|\s*[^|]+\(/);
-        if (match) usedLetters.add(match[1]);
-    }
+    // Check if IP already has an assigned letter in the 'ip_letters' hash
+    const existing = await redisStore.hGet('ip_letters', ip);
+    if (existing) return existing;
 
-    for (let i = 0; i < 26; i++) {
-        const letter = alphabet[i];
-        if (!usedLetters.has(letter)) return letter;
+    const counterKey = 'letter_counter';
+    const idx = await redisStore.incr(counterKey) - 1; 
+    
+    const base = alphabet.length;
+    let letter;
+    if (idx < base) {
+        letter = alphabet[idx];
+    } else {
+        const first = Math.floor((idx - base) / base);
+        const second = (idx - base) % base;
+        letter = alphabet[first % base] + alphabet[second % base];
     }
-    for (let i = 0; i < 26; i++) {
-        for (let j = 0; j < 26; j++) {
-            const letter = alphabet[i] + alphabet[j];
-            if (!usedLetters.has(letter)) return letter;
-        }
-    }
-    return 'ZZ';
+    
+    // Persist the assignment
+    await redisStore.hSet('ip_letters', ip, letter);
+    return letter;
 }
 
 
@@ -411,31 +408,34 @@ app.get(/^\/favicon/, (req, res) => res.status(204).end());
 
 app.post('/api/collect', async (req, res) => {
     const data = req.body;
-    // Use real public IP as key
     const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip;
     if (!ip) return res.status(400).json({ ok: false });
     
-    const extras = await redisGet('extras', {});
-    // Merge: conserver les données existantes (pseudos, url_pseudo, etc.)
-    const existing = extras[ip] || {};
-    extras[ip] = {
-        ...existing,
-        screen: data.screen || existing.screen || 'N/A',
-        lang: data.lang || existing.lang || 'N/A',
-        timezone: data.timezone || existing.timezone || 'N/A',
-        cores: data.cores || existing.cores || 'N/A',
-        ram: data.ram ? data.ram + ' GB' : (existing.ram || 'N/A'),
-        touch: data.touch !== undefined ? (data.touch ? 'Oui' : 'Non') : (existing.touch || 'N/A'),
-        platform: data.platform || existing.platform || 'N/A',
-        darkmode: data.darkmode !== undefined ? (data.darkmode ? '🌙 Dark' : '☀️ Light') : (existing.darkmode || 'N/A'),
-        battery_level: data.battery_level !== null && data.battery_level !== undefined ? data.battery_level + '%' : (existing.battery_level || 'N/A'),
-        battery_charging: data.battery_charging !== null && data.battery_charging !== undefined ? (data.battery_charging ? '⚡ Oui' : 'Non') : (existing.battery_charging || 'N/A'),
-        connection: data.connection || existing.connection || 'N/A',
-        localstorage: data.localstorage || existing.localstorage || 'N/A',
-        adblock: data.adblock || existing.adblock || 'N/A',
-        time: Math.floor(Date.now() / 1000)
-    };
-    await redisSet('extras', extras);
+    // Store per-IP extras atomically using a Redis hash (extras:{ip})
+    if (redisStore) {
+        const extraKey = `extras:${ip}`;
+        const existing = await redisStore.hGetAll(extraKey);
+        const updated = {
+            ...existing,
+            screen: data.screen || existing.screen || 'N/A',
+            lang: data.lang || existing.lang || 'N/A',
+            timezone: data.timezone || existing.timezone || 'N/A',
+            cores: data.cores || existing.cores || 'N/A',
+            ram: data.ram ? data.ram + ' GB' : (existing.ram || 'N/A'),
+            touch: data.touch !== undefined ? (data.touch ? 'Oui' : 'Non') : (existing.touch || 'N/A'),
+            platform: data.platform || existing.platform || 'N/A',
+            darkmode: data.darkmode !== undefined ? (data.darkmode ? '🌙 Dark' : '☀️ Light') : (existing.darkmode || 'N/A'),
+            battery_level: data.battery_level !== null && data.battery_level !== undefined ? data.battery_level + '%' : (existing.battery_level || 'N/A'),
+            battery_charging: data.battery_charging !== null && data.battery_charging !== undefined ? (data.battery_charging ? '⚡ Oui' : 'Non') : (existing.battery_charging || 'N/A'),
+            connection: data.connection || existing.connection || 'N/A',
+            localstorage: data.localstorage || existing.localstorage || 'N/A',
+            adblock: data.adblock || existing.adblock || 'N/A',
+            time: Math.floor(Date.now() / 1000).toString()
+        };
+        await redisStore.hSet(extraKey, updated);
+        // Expiration optional, ex: 3 jours
+        await redisStore.expire(extraKey, 259200); 
+    }
     res.json({ ok: true });
 });
 
@@ -633,24 +633,24 @@ app.post('/api/room-profile', async (req, res) => {
     const { room, pseudo, color } = req.body;
     if (!room || typeof room !== 'string') return res.status(400).json({ ok: false });
     
-    // Sanitize room name
-    room = room.replace(/[^a-z0-9\-_]/gi, '').toLowerCase();
-    if (!room) return res.status(400).json({ ok: false });
+    // Sanitize room name into a new variable
+    const sanitizedRoom = room.replace(/[^a-z0-9\-_]/gi, '').toLowerCase();
+    if (!sanitizedRoom) return res.status(400).json({ ok: false });
     
     try {
         const roomProfiles = await redisGet('roomProfiles', {});
-        if (!roomProfiles[room]) roomProfiles[room] = {};
+        if (!roomProfiles[sanitizedRoom]) roomProfiles[sanitizedRoom] = {};
         
         // Add profile data if provided
         if (pseudo || color) {
-            roomProfiles[room].profile = {
+            roomProfiles[sanitizedRoom].profile = {
                 pseudo: pseudo || null,
                 color: color || null
             };
         }
         
         await redisSet('roomProfiles', roomProfiles);
-        res.json({ ok: true, url: 'https://chaltet.com/' + room });
+        res.json({ ok: true, url: 'https://chaltet.com/' + sanitizedRoom });
     } catch (error) {
         console.error('Error saving room profile:', error);
         res.status(500).json({ ok: false });
@@ -880,30 +880,32 @@ app.post('/admin/api/delete-selected', async (req, res) => {
         if (redisStore) {
             const lines = await redisStore.lRange('logs', 0, -1);
             const kept = lines.filter((_, i) => !setIndices.has(i));
-            // Sécurité : ne pas tout effacer si kept est vide et qu'on ne voulait pas tout supprimer
+            
             if (kept.length === 0 && lines.length > setIndices.size) {
                 log('[Admin] Delete aborted — would delete all logs unexpectedly');
                 return res.json({ ok: false, message: 'Opération annulée — vérifiez la sélection' });
             }
-            // Utiliser pipeline pour atomicité
+            
             const pipeline = redisStore.multi();
             pipeline.del('logs');
             if (kept.length > 0) {
-                // Pousser par batch de 1000 pour éviter les limites d'arguments
                 for (let i = 0; i < kept.length; i += 1000) {
                     pipeline.rPush('logs', ...kept.slice(i, i + 1000));
                 }
             }
+            pipeline.lTrim('logs', -5000, -1); // Keep last 5000 lines
             await pipeline.exec();
         } else {
             const data = await fsp.readFile(LOG_FILE, 'utf8');
             let lines = data.trim().split('\n');
             lines = lines.filter((_, i) => !setIndices.has(i));
-            await fsp.writeFile(LOG_FILE, lines.join('\n') + (lines.length ? '\n' : ''), 'utf8');
+            const newContent = lines.slice(-5000).join('\n') + (lines.length ? '\n' : '');
+            await fsp.writeFile(LOG_FILE, newContent, 'utf8');
         }
         res.json({ ok: true });
     } catch (e) {
-        res.json({ ok: false });
+        log('Error in delete-selected:', e.message);
+        res.json({ ok: false, message: e.message });
     }
 });
 
@@ -973,18 +975,18 @@ io.on('connection', (socket) => {
         : socket.handshake.address;
     
     try {
-        const extras = await redisGet('extras', {});
-        if (extras[realIp]) {
-            const urlPseudo = extras[realIp].url_pseudo;
-            const urlColor = extras[realIp].url_color;
+        // Retrieve extras from Redis hash per IP
+        if (redisStore) {
+            const extraKey = `extras:${realIp}`;
+            const extras = await redisStore.hGetAll(extraKey);
             
-            if (urlPseudo || urlColor) {
+            if (extras && (extras.url_pseudo || extras.url_color)) {
                 const profile = socket.data.profile || {};
-                if (urlPseudo && !profile.displayName) {
-                    profile.displayName = urlPseudo;
+                if (extras.url_pseudo && !profile.displayName) {
+                    profile.displayName = extras.url_pseudo;
                 }
-                if (urlColor && !profile.profileColor) {
-                    profile.profileColor = urlColor;
+                if (extras.url_color && !profile.profileColor) {
+                    profile.profileColor = extras.url_color;
                 }
                 
                 if (Object.keys(profile).length > 0) {
@@ -1065,25 +1067,29 @@ io.on('connection', (socket) => {
         ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
         : socket.handshake.address;
     
-    // Save profile — debounce 1.5s pour éviter d'enregistrer chaque frappe
+    // Save profile per-IP in a Redis hash
     if (socket._pseudoSaveTimer) clearTimeout(socket._pseudoSaveTimer);
     socket._pseudoSaveTimer = setTimeout(async () => {
-        // Ne pas enregistrer les pseudos trop courts (frappe en cours)
         if (!data.displayName || data.displayName.length < 2) return;
         try {
-            const extras = await redisGet('extras', {});
-            if (!extras[realIp]) extras[realIp] = {};
-            extras[realIp].url_pseudo = data.displayName;
-            extras[realIp].url_color = data.profileColor;
-            extras[realIp].current_pseudo = data.displayName;
-            extras[realIp].current_color = data.profileColor;
-            if (!extras[realIp].pseudos) extras[realIp].pseudos = '';
-            const existing = extras[realIp].pseudos.split(', ').filter(Boolean);
-            if (!existing.includes(data.displayName)) existing.push(data.displayName);
-            extras[realIp].pseudos = existing.join(', ');
-            await redisSet('extras', extras);
-            log(`[Profile] Saved: ${data.displayName} (${realIp})`);
-        } catch(e) {}
+            if (redisStore) {
+                const extraKey = `extras:${realIp}`;
+                const existing = await redisStore.hGetAll(extraKey);
+                const pseudos = existing.pseudos ? existing.pseudos.split(', ').filter(Boolean) : [];
+                if (!pseudos.includes(data.displayName)) pseudos.push(data.displayName);
+                
+                const updated = {
+                    ...existing,
+                    url_pseudo: data.displayName,
+                    url_color: data.profileColor,
+                    current_pseudo: data.displayName,
+                    current_color: data.profileColor,
+                    pseudos: pseudos.join(', ')
+                };
+                await redisStore.hSet(extraKey, updated);
+                log(`[Profile] Saved: ${data.displayName} (${realIp})`);
+            }
+        } catch(e) { log('Error saving profile extras:', e.message); }
     }, 1500);
     // Update pseudo in logs (Redis OR file fallback)
     // Removed pseudo log update block – frontend does not rely on log pseudo data.
