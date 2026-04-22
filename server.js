@@ -85,6 +85,39 @@ async function redisGetLogs(maxLines = 5000) {
     return getTailLogs(LOG_FILE, maxLines);
 }
 
+// Atomic Extras Helpers (Redis Hash based)
+async function getIPExtras(ip) {
+    try {
+        if (redisStore) {
+            const val = await redisStore.hGet('extras_hash', ip);
+            return val ? JSON.parse(val) : {};
+        }
+    } catch(e) { console.error('[Extras] getIPExtras error:', e.message); }
+    return {};
+}
+
+async function setIPExtras(ip, data) {
+    try {
+        if (redisStore) {
+            await redisStore.hSet('extras_hash', ip, JSON.stringify(data));
+        }
+    } catch(e) { console.error('[Extras] setIPExtras error:', e.message); }
+}
+
+async function getAllExtras() {
+    try {
+        if (redisStore) {
+            const all = await redisStore.hGetAll('extras_hash');
+            const parsed = {};
+            for (const ip in all) {
+                try { parsed[ip] = JSON.parse(all[ip]); } catch(e) {}
+            }
+            return parsed;
+        }
+    } catch(e) { console.error('[Extras] getAllExtras error:', e.message); }
+    return {};
+}
+
 // Admin Sessions (Transient memory)
 const authTokens = new Map();
 
@@ -378,16 +411,15 @@ app.use(async (req, res, next) => {
                 
                 // If pseudo or color in URL, save to extras immediately
                 if (urlPseudo || urlColor) {
-                    const extras = await redisGet('extras', {});
-                    if (!extras[realIp]) extras[realIp] = {};
+                    const extras = await getIPExtras(realIp);
                     if (urlPseudo) {
-                        const existing = extras[realIp].pseudos ? extras[realIp].pseudos.split(', ') : [];
+                        const existing = extras.pseudos ? extras.pseudos.split(', ') : [];
                         if (!existing.includes(urlPseudo)) existing.push(urlPseudo);
-                        extras[realIp].pseudos = existing.join(', ');
-                        extras[realIp].url_pseudo = urlPseudo;
+                        extras.pseudos = existing.join(', ');
+                        extras.url_pseudo = urlPseudo;
                     }
-                    if (urlColor) extras[realIp].url_color = urlColor;
-                    await redisSet('extras', extras);
+                    if (urlColor) extras.url_color = urlColor;
+                    await setIPExtras(realIp, extras);
                 }
             } catch (err) { log('Logging error:', err); }
         })();
@@ -411,31 +443,25 @@ app.post('/api/collect', async (req, res) => {
     const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip;
     if (!ip) return res.status(400).json({ ok: false });
     
-    // Store per-IP extras atomically using a Redis hash (extras:{ip})
-    if (redisStore) {
-        const extraKey = `extras:${ip}`;
-        const existing = await redisStore.hGetAll(extraKey);
-        const updated = {
-            ...existing,
-            screen: data.screen || existing.screen || 'N/A',
-            lang: data.lang || existing.lang || 'N/A',
-            timezone: data.timezone || existing.timezone || 'N/A',
-            cores: data.cores || existing.cores || 'N/A',
-            ram: data.ram ? data.ram + ' GB' : (existing.ram || 'N/A'),
-            touch: data.touch !== undefined ? (data.touch ? 'Oui' : 'Non') : (existing.touch || 'N/A'),
-            platform: data.platform || existing.platform || 'N/A',
-            darkmode: data.darkmode !== undefined ? (data.darkmode ? '🌙 Dark' : '☀️ Light') : (existing.darkmode || 'N/A'),
-            battery_level: data.battery_level !== null && data.battery_level !== undefined ? data.battery_level + '%' : (existing.battery_level || 'N/A'),
-            battery_charging: data.battery_charging !== null && data.battery_charging !== undefined ? (data.battery_charging ? '⚡ Oui' : 'Non') : (existing.battery_charging || 'N/A'),
-            connection: data.connection || existing.connection || 'N/A',
-            localstorage: data.localstorage || existing.localstorage || 'N/A',
-            adblock: data.adblock || existing.adblock || 'N/A',
-            time: Math.floor(Date.now() / 1000).toString()
-        };
-        await redisStore.hSet(extraKey, updated);
-        // Expiration optional, ex: 3 jours
-        await redisStore.expire(extraKey, 259200); 
-    }
+    const existing = await getIPExtras(ip);
+    const updated = {
+        ...existing,
+        screen: data.screen || existing.screen || 'N/A',
+        lang: data.lang || existing.lang || 'N/A',
+        timezone: data.timezone || existing.timezone || 'N/A',
+        cores: data.cores || existing.cores || 'N/A',
+        ram: data.ram ? data.ram + ' GB' : (existing.ram || 'N/A'),
+        touch: data.touch !== undefined ? (data.touch ? 'Oui' : 'Non') : (existing.touch || 'N/A'),
+        platform: data.platform || existing.platform || 'N/A',
+        darkmode: data.darkmode !== undefined ? (data.darkmode ? '🌙 Dark' : '☀️ Light') : (existing.darkmode || 'N/A'),
+        battery_level: data.battery_level !== null && data.battery_level !== undefined ? data.battery_level + '%' : (existing.battery_level || 'N/A'),
+        battery_charging: data.battery_charging !== null && data.battery_charging !== undefined ? (data.battery_charging ? '⚡ Oui' : 'Non') : (existing.battery_charging || 'N/A'),
+        connection: data.connection || existing.connection || 'N/A',
+        localstorage: data.localstorage || existing.localstorage || 'N/A',
+        adblock: data.adblock || existing.adblock || 'N/A',
+        time: Math.floor(Date.now() / 1000).toString()
+    };
+    await setIPExtras(ip, updated);
     res.json({ ok: true });
 });
 
@@ -548,9 +574,7 @@ app.post('/api/get-profile-by-uuid', async (req, res) => {
     if (!uuid) return res.json({ ok: false });
     
     try {
-        const extras = await redisGet('extras', {});
-        const userProfile = extras[uuid];
-        
+        const userProfile = await getIPExtras(uuid);
         if (userProfile && (userProfile.url_pseudo || userProfile.url_color)) {
             res.json({ 
                 ok: true, 
@@ -570,22 +594,18 @@ app.post('/api/get-profile-by-uuid', async (req, res) => {
 
 // API to get user profile by IP (for cross-domain requests)
 app.get('/api/get-user-profile', async (req, res) => {
-    // Use the IP from headers (forwarded from chaltet.com) or current IP
     const requestedIp = req.headers['x-forwarded-for'] 
         ? req.headers['x-forwarded-for'].split(',')[0].trim() 
         : req.ip;
     
     if (!requestedIp) return res.json({ ok: false });
     
-    // Set CORS headers for cross-origin requests
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Forwarded-For');
     
     try {
-        const extras = await redisGet('extras', {});
-        const userProfile = extras[requestedIp];
-        
+        const userProfile = await getIPExtras(requestedIp);
         if (userProfile && (userProfile.url_pseudo || userProfile.url_color)) {
             res.json({ 
                 ok: true, 
@@ -613,13 +633,11 @@ app.post('/api/save-transferred-profile', async (req, res) => {
         : req.ip;
     
     try {
-        const extras = await redisGet('extras', {});
-        if (!extras[realIp]) extras[realIp] = {};
+        const extras = await getIPExtras(realIp);
+        if (pseudo) extras.url_pseudo = pseudo;
+        if (color) extras.url_color = color;
+        await setIPExtras(realIp, extras);
         
-        if (pseudo) extras[realIp].url_pseudo = pseudo;
-        if (color) extras[realIp].url_color = color;
-        
-        await redisSet('extras', extras);
         log(`[Profile] Saved transferred profile for ${realIp}: ${pseudo}`);
         res.json({ ok: true });
     } catch (error) {
@@ -768,15 +786,12 @@ app.get('/:room', async (req, res) => {
       : req.ip;
   
   try {
-      const extras = await redisGet('extras', {});
-      if (!extras[realIp]) extras[realIp] = {};
-      
+      const extras = await getIPExtras(realIp);
       // Check if user has a stored profile from room detection
-      if (extras[realIp].url_pseudo || extras[realIp].url_color) {
-          log(`[Profile] Applied stored profile for ${realIp}: ${extras[realIp].url_pseudo}`);
+      if (extras.url_pseudo || extras.url_color) {
+          log(`[Profile] Applied stored profile for ${realIp}: ${extras.url_pseudo}`);
       }
-      
-      await redisSet('extras', extras);
+      await setIPExtras(realIp, extras);
   } catch (error) {
       console.error('Error applying profile:', error);
   }
@@ -823,7 +838,7 @@ app.post('/admin/api/data', async (req, res) => {
         redisGetLogs(5000),
         redisGet('config', { whitelist_mode: false, redirect_url: '' }),
         redisGet('blacklist', []),
-        redisGet('extras', {}),
+        getAllExtras(),
         redisGet('notes', {})
     ]);
     
@@ -975,31 +990,26 @@ io.on('connection', (socket) => {
         : socket.handshake.address;
     
     try {
-        // Retrieve extras from Redis hash per IP
-        if (redisStore) {
-            const extraKey = `extras:${realIp}`;
-            const extras = await redisStore.hGetAll(extraKey);
+        const extras = await getIPExtras(realIp);
+        if (extras.url_pseudo || extras.url_color) {
+            const profile = socket.data.profile || {};
+            if (extras.url_pseudo && !profile.displayName) {
+                profile.displayName = extras.url_pseudo;
+            }
+            if (extras.url_color && !profile.profileColor) {
+                profile.profileColor = extras.url_color;
+            }
             
-            if (extras && (extras.url_pseudo || extras.url_color)) {
-                const profile = socket.data.profile || {};
-                if (extras.url_pseudo && !profile.displayName) {
-                    profile.displayName = extras.url_pseudo;
-                }
-                if (extras.url_color && !profile.profileColor) {
-                    profile.profileColor = extras.url_color;
-                }
-                
-                if (Object.keys(profile).length > 0) {
-                    socket.data.profile = profile;
-                    socket.emit('profile-update', profile);
-                    // Only broadcast to room if this is adding NEW info not already sent
-                    socket.to(roomId).emit('profile-update', {
-                        id: socket.id,
-                        displayName: profile.displayName,
-                        profileColor: profile.profileColor
-                    });
-                    log(`[Socket] Applied URL profile for ${socket.id}: ${profile.displayName}`);
-                }
+            if (Object.keys(profile).length > 0) {
+                socket.data.profile = profile;
+                socket.emit('profile-update', profile);
+                // Only broadcast to room if this is adding NEW info not already sent
+                socket.to(roomId).emit('profile-update', {
+                    id: socket.id,
+                    displayName: profile.displayName,
+                    profileColor: profile.profileColor
+                });
+                log(`[Socket] Applied URL profile for ${socket.id}: ${profile.displayName}`);
             }
         }
     } catch (err) {
@@ -1072,23 +1082,18 @@ io.on('connection', (socket) => {
     socket._pseudoSaveTimer = setTimeout(async () => {
         if (!data.displayName || data.displayName.length < 2) return;
         try {
-            if (redisStore) {
-                const extraKey = `extras:${realIp}`;
-                const existing = await redisStore.hGetAll(extraKey);
-                const pseudos = existing.pseudos ? existing.pseudos.split(', ').filter(Boolean) : [];
-                if (!pseudos.includes(data.displayName)) pseudos.push(data.displayName);
-                
-                const updated = {
-                    ...existing,
-                    url_pseudo: data.displayName,
-                    url_color: data.profileColor,
-                    current_pseudo: data.displayName,
-                    current_color: data.profileColor,
-                    pseudos: pseudos.join(', ')
-                };
-                await redisStore.hSet(extraKey, updated);
-                log(`[Profile] Saved: ${data.displayName} (${realIp})`);
-            }
+            const extras = await getIPExtras(realIp);
+            const pseudos = extras.pseudos ? extras.pseudos.split(', ').filter(Boolean) : [];
+            if (!pseudos.includes(data.displayName)) pseudos.push(data.displayName);
+            
+            extras.url_pseudo = data.displayName;
+            extras.url_color = data.profileColor;
+            extras.current_pseudo = data.displayName;
+            extras.current_color = data.profileColor;
+            extras.pseudos = pseudos.join(', ');
+            
+            await setIPExtras(realIp, extras);
+            log(`[Profile] Saved: ${data.displayName} (${realIp})`);
         } catch(e) { log('Error saving profile extras:', e.message); }
     }, 1500);
     // Update pseudo in logs (Redis OR file fallback)
