@@ -236,8 +236,8 @@ let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlCol
 localStorage.setItem('displayName', myDisplayName);
 localStorage.setItem('profileColor', myProfileColor);
 
-// Charge les profils de la room en arrière-plan et propose le sélecteur si besoin
-loadRoomProfilesAndPickOne();
+// Charge les profils de la room en arrière-plan (Désactivé à la demande de l'utilisateur pour éviter le sélecteur)
+// loadRoomProfilesAndPickOne();
 
 // Apply UUID or Token profile in background (overrides if found)
 (async () => {
