@@ -10,7 +10,7 @@
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
+    "express": "^4.21.2",
     "express-rate-limit": "^8.3.2",
     "hark": "^1.2.3",
     "helmet": "^8.1.0",
