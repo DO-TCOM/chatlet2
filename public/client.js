@@ -140,6 +140,20 @@ async function fetchProfileByUUID() {
     return null;
 }
 
+// Fetch profile by token (from URL hash #token)
+async function fetchProfileByToken() {
+    const hash = window.location.hash.replace('#', '').trim();
+    if (!hash || hash.length < 5 || hash.includes(':')) return null;
+    try {
+        const res = await fetch('/api/profile-by-token/' + hash);
+        const data = await res.json();
+        if (data.ok) {
+            return { pseudo: data.pseudo, color: data.color };
+        }
+    } catch (e) {}
+    return null;
+}
+
 // ─── Chargement des profils depuis la room chatlet ───────────────────────────
 // Quand quelqu'un clique un lien chaltet.com/room, on récupère la liste des
 // profils stockés par le script Tampermonkey et on lui propose de choisir le sien.
@@ -225,19 +239,35 @@ localStorage.setItem('profileColor', myProfileColor);
 // Charge les profils de la room en arrière-plan et propose le sélecteur si besoin
 loadRoomProfilesAndPickOne();
 
-// Apply UUID profile in background (overrides if found)
-fetchProfileByUUID().then(uuidProfile => {
-    if (uuidProfile) {
-        myDisplayName = uuidProfile.pseudo || myDisplayName;
-        myProfileColor = uuidProfile.color || myProfileColor;
+// Apply UUID or Token profile in background (overrides if found)
+(async () => {
+    // 1. Try Token first (priority)
+    const tokenProfile = await fetchProfileByToken();
+    if (tokenProfile) {
+        myDisplayName = tokenProfile.pseudo;
+        myProfileColor = tokenProfile.color.startsWith('#') ? tokenProfile.color : '#' + tokenProfile.color;
+    } else {
+        // 2. Try UUID fallback
+        const uuidProfile = await fetchProfileByUUID();
+        if (uuidProfile) {
+            myDisplayName = uuidProfile.pseudo || myDisplayName;
+            myProfileColor = uuidProfile.color || myProfileColor;
+        }
+    }
+    
+    if (tokenProfile || (typeof uuidProfile !== 'undefined' && uuidProfile)) {
         localStorage.setItem('displayName', myDisplayName);
         localStorage.setItem('profileColor', myProfileColor);
         // Update UI if already rendered
         const nameInput = document.querySelector('.settings .input');
         if (nameInput) nameInput.value = myDisplayName;
         if (typeof updateLocalProfileUI === 'function') updateLocalProfileUI();
+        // If already in a room, announce change
+        if (socket && socket.connected && roomId) {
+            socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
+        }
     }
-});
+})();
 
 // Function to find matching profile for current user
 function findMatchingProfile(profiles) {
