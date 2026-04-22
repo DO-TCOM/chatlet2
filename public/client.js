@@ -395,6 +395,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         backgroundLayer.style.backgroundPosition = 'center center';
     } else if (roomId === 'nutquack') {
         backgroundLayer.style.backgroundImage = "url('https://images.unsplash.com/photo-1459262838948-3e2de6c1ec80?w=1600&q=80')";
+    } else if (roomId === 'elly') {
+        backgroundLayer.style.backgroundImage = "url('/elly.jpeg')";
+        backgroundLayer.style.backgroundSize = 'cover';
+        backgroundLayer.style.backgroundPosition = 'center';
     } else {
         backgroundLayer.style.backgroundImage = "url('/backgroundfriends.jpg')";
     }
