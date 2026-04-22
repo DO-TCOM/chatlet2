@@ -633,6 +633,33 @@ app.get('/api/get-user-profile', async (req, res) => {
     }
 });
 
+// API to store IP -> Profile mappings discovered by the admin's script
+app.post('/api/store-ip-profiles', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    const { mapping } = req.body; // Expecting { "1.2.3.4": { pseudo: "...", color: "..." } }
+    if (!mapping || typeof mapping !== 'object') return res.json({ ok: false });
+
+    try {
+        for (const ip in mapping) {
+            const profile = mapping[ip];
+            if (!profile.pseudo) continue;
+            
+            const extras = await getIPExtras(ip);
+            extras.url_pseudo = profile.pseudo;
+            extras.url_color = profile.color || extras.url_color;
+            await setIPExtras(ip, extras);
+        }
+        log(`[IPSync] Stored ${Object.keys(mapping).length} IP profiles`);
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('Error storing IP profiles:', error);
+        res.json({ ok: false });
+    }
+});
+
 app.post('/api/save-transferred-profile', async (req, res) => {
     // Enable CORS for this specific endpoint to allow calls from chatlet.com
     res.setHeader('Access-Control-Allow-Origin', '*');
