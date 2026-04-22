@@ -815,7 +815,9 @@ app.get('/:room', async (req, res) => {
 app.get('/admin/check-token', (req, res) => {
     const adminToken = req.headers['x-admin-token'] || req.query.admin_token;
     const expectedToken = process.env.ADMIN_TOKEN || 'admin_access_2024';
-    
+    res.json({ ok: adminToken === expectedToken });
+});
+
 app.get('/admin/stats', (req, res) => {
     // Require a valid admin token in cookie or query to even see the dashboard file
     const adminToken = req.query.admin_token;
