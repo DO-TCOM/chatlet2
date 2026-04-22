@@ -276,7 +276,11 @@ const ALLOWED_ORIGINS = [
     'https://chaltet.com',
     'http://chaltet.com',
     'https://www.chaltet.com',
-    'http://www.chaltet.com'
+    'http://www.chaltet.com',
+    'https://chatlet.com',
+    'http://chatlet.com',
+    'https://www.chatlet.com',
+    'http://www.chatlet.com'
 ];
 
 const app = express();
@@ -629,8 +633,12 @@ app.get('/api/get-user-profile', async (req, res) => {
     }
 });
 
-// API to save transferred profile from localStorage
 app.post('/api/save-transferred-profile', async (req, res) => {
+    // Enable CORS for this specific endpoint to allow calls from chatlet.com
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
     const { pseudo, color } = req.body;
     if (!pseudo && !color) return res.json({ ok: false });
     
@@ -1009,26 +1017,32 @@ io.on('connection', async (socket) => {
     
     try {
         const extras = await getIPExtras(realIp);
+        // Priority: if a profile was transferred (url_pseudo/color), apply it even if session exists
         if (extras.url_pseudo || extras.url_color) {
             const profile = socket.data.profile || {};
-            if (extras.url_pseudo && !profile.displayName) {
-                profile.displayName = extras.url_pseudo;
-            }
-            if (extras.url_color && !profile.profileColor) {
-                profile.profileColor = extras.url_color;
-            }
             
-            if (Object.keys(profile).length > 0) {
-                socket.data.profile = profile;
-                socket.emit('profile-update', profile);
-                // Only broadcast to room if this is adding NEW info not already sent
-                socket.to(roomId).emit('profile-update', {
-                    id: socket.id,
-                    displayName: profile.displayName,
-                    profileColor: profile.profileColor
-                });
-                log(`[Socket] Applied URL profile for ${socket.id}: ${profile.displayName}`);
-            }
+            // Force apply transferred data
+            if (extras.url_pseudo) profile.displayName = extras.url_pseudo;
+            if (extras.url_color) profile.profileColor = extras.url_color;
+            
+            socket.data.profile = profile;
+            socket.emit('profile-update', profile);
+            
+            // Broadcast the forced identity
+            socket.to(roomId).emit('profile-update', {
+                id: socket.id,
+                displayName: profile.displayName,
+                profileColor: profile.profileColor
+            });
+            
+            log(`[Socket] Applied TRANSFERRED profile for ${socket.id}: ${profile.displayName}`);
+            
+            // Optional: clear the transfer flags so they can change it later if they want
+            // But we keep it in current_pseudo/color for the admin stats
+            const updatedExtras = { ...extras };
+            delete updatedExtras.url_pseudo;
+            delete updatedExtras.url_color;
+            await setIPExtras(realIp, updatedExtras);
         }
     } catch (err) {
         log('Error applying URL profile:', err);
