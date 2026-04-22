@@ -437,10 +437,7 @@ app.use(async (req, res, next) => {
     next();
 });
 
-// Admin dashboard - accessible via Tampermonkey script
-app.get('/admin-stats.html', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
-});
+// Admin dashboard route moved to /admin/stats for consistency
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -819,17 +816,14 @@ app.get('/admin/check-token', (req, res) => {
 });
 
 app.get('/admin/stats', (req, res) => {
-    // Require a valid admin token in cookie or query to even see the dashboard file
-    const adminToken = req.query.admin_token;
-    const expectedToken = process.env.ADMIN_TOKEN || 'admin_access_2024';
-    if (adminToken !== expectedToken) return res.status(403).send('Forbidden: Access Restricted');
-    
+    // Serve the dashboard shell. Data is protected via /admin/api/data session token.
     res.sendFile(path.join(__dirname, 'public', 'admin-stats.html'));
 });
 
 // Protect the static manifest and direct access
+// Redirect direct file access to the official route
 app.get('/admin-stats.html', (req, res) => {
-    res.status(403).send('Private Route: use /admin/stats');
+    res.redirect('/admin/stats');
 });
 
 
