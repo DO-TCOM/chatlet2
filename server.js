@@ -962,7 +962,7 @@ app.use((req, res) => {
 });
 
 
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   const clientIp = socket.handshake.headers['x-forwarded-for']
     ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
     : socket.handshake.address;
