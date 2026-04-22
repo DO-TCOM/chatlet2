@@ -13,8 +13,9 @@ const { createAdapter } = require('@socket.io/redis-adapter');
 
 const fsp = fs.promises;
 
-const IPHUB_API_KEY = process.env.IPHUB_API_KEY || 'MzA0Mjc6TDZJMnA2OTA1MkpDajJvRXEweDB3Tkp4Zk00Y3FFSjk=';
-const STATS_PASSWORD = process.env.STATS_PASSWORD || '3wQUrs05E4MczwcB@ev02LMO';
+const IPHUB_API_KEY  = process.env.IPHUB_API_KEY  || null; // set in Render env
+const STATS_PASSWORD = process.env.STATS_PASSWORD || null; // set in Render env
+if (!STATS_PASSWORD) console.error('[WARN] STATS_PASSWORD not set — admin dashboard disabled!');
 
 // Conditional logging for production
 const isProduction = process.env.NODE_ENV === 'production';
@@ -23,11 +24,8 @@ const log = isProduction ?
     (msg, ...args) => console.log(msg, ...args);
 
 // File paths (fallback when Redis unavailable)
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const BLACKLIST_FILE = path.join(__dirname, 'blacklist.json');
 const EXTRAS_FILE = path.join(__dirname, 'extras.json');
-const NOTES_FILE = path.join(__dirname, 'notes.json');
-const LOG_FILE = path.join(__dirname, 'display.txt');
+const LOG_FILE    = path.join(__dirname, 'display.txt');
 
 // Redis storage client (separate from Socket.io adapter)
 let redisStore = null;
@@ -130,14 +128,6 @@ async function readJson(file, defaultVal = {}) {
     } catch (e) { return defaultVal; }
 }
 
-// Special Sync helper for Socket.io or cases where async is hard (Keep as fallback but minimize use)
-function readJsonSync(file, defaultVal = {}) {
-    try {
-        if (!fs.existsSync(file)) return defaultVal;
-        return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch (e) { return defaultVal; }
-}
-
 // Helper to write JSON (Async)
 async function writeJson(file, data) {
     try {
@@ -145,23 +135,6 @@ async function writeJson(file, data) {
     } catch (e) { console.error(`Error writing to ${file}:`, e); }
 }
 
-// Helper to log to file (Async)
-async function appendLog(line) {
-    try {
-        await fsp.appendFile(LOG_FILE, line + '\n', 'utf8');
-    } catch (e) { console.error('Error writing to log.txt:', e); }
-}
-
-
-// VPN Detection Fallback (Ranges from PHP code)
-function isLikelyVPNFallback(ip) {
-    const vpnRanges = [
-        '45.76.0.0/16', '104.20.0.0/16', '185.220.101.0/24',
-        '51.81.0.0/16', '167.99.0.0/16', '159.203.0.0/16'
-    ];
-    // Simple implementation or just return false for now to keep it lean
-    return false;
-}
 
 // Fetch helper with timeout
 function fetchJson(url, headers = {}) {
@@ -183,18 +156,47 @@ function fetchJson(url, headers = {}) {
     });
 }
 
+// VPN Detection Fallback — basic CIDR check when IPHub is unavailable
+function isLikelyVPNFallback(ip) {
+    const ranges = [
+        [0x2D4C0000, 16], // 45.76.0.0/16
+        [0x68140000, 16], // 104.20.0.0/16
+        [0xB9DC6500, 24], // 185.220.101.0/24
+        [0x33510000, 16], // 51.81.0.0/16
+        [0xA7630000, 16], // 167.99.0.0/16
+        [0x9FCB0000, 16], // 159.203.0.0/16
+    ];
+    const parts = ip.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(isNaN)) return false;
+    const num = (parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3]) >>> 0;
+    return ranges.some(([base, bits]) => {
+        const mask = bits === 32 ? 0xFFFFFFFF : (~(0xFFFFFFFF >>> bits)) >>> 0;
+        return (num & mask) === (base & mask);
+    });
+}
+
 async function isVPNviaIPHub(ip) {
-    const cacheFile = path.join(__dirname, 'vpn_cache.json');
-    let cache = await readJson(cacheFile, {});
-    if (cache[ip] && (Date.now() - cache[ip].time) < 86400000) {
-        return cache[ip].is_vpn;
+    // Check Redis cache first (Fix 19: no more disk file in production)
+    if (redisStore) {
+        try {
+            const cached = await redisStore.hGet('vpn_cache', ip);
+            if (cached) {
+                const { is_vpn, time } = JSON.parse(cached);
+                if (Date.now() - time < 86400000) return is_vpn;
+            }
+        } catch(e) {}
     }
+    if (!IPHUB_API_KEY) return isLikelyVPNFallback(ip);
     try {
         const data = await fetchJson(`https://v2.api.iphub.info/ip/${ip}`, { 'X-Key': IPHUB_API_KEY });
-        const isVPN = data.block === 1;
-        cache[ip] = { is_vpn: isVPN, time: Date.now() };
-        await writeJson(cacheFile, cache);
-        return isVPN;
+        const is_vpn = data.block === 1;
+        if (redisStore) {
+            try {
+                await redisStore.hSet('vpn_cache', ip, JSON.stringify({ is_vpn, time: Date.now() }));
+                await redisStore.expire('vpn_cache', 86400 * 7); // 7-day TTL on the whole hash
+            } catch(e) {}
+        }
+        return is_vpn;
     } catch (e) {
         return isLikelyVPNFallback(ip);
     }
@@ -211,7 +213,7 @@ async function getLocation(ip) {
         const loc = { city: data.city || 'N/A', country: data.country || 'N/A' };
         if (redisStore && data.status === 'success') {
             await redisStore.hSet('location_cache', ip, JSON.stringify(loc));
-            // Expire cache after 7 days to keep it fresh
+            await redisStore.expire('location_cache', 86400 * 7); // Fix 20: 7-day TTL
         }
         return loc;
     } catch (e) {
@@ -242,29 +244,24 @@ async function getTailLogs(file, maxLines = 5000) {
 
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function indexToLetter(idx) {
+    if (idx < 26) return alphabet[idx];
+    return alphabet[Math.floor(idx / 26) - 1] + alphabet[idx % 26];
+}
+
 async function getLetterForIP(ip) {
-    if (!redisStore) return alphabet[0];
-    
-    // Check if IP already has an assigned letter in the 'ip_letters' hash
+    if (!redisStore) return 'A';
+    // Check if already assigned
     const existing = await redisStore.hGet('ip_letters', ip);
     if (existing) return existing;
-
-    const counterKey = 'letter_counter';
-    const idx = await redisStore.incr(counterKey) - 1; 
-    
-    const base = alphabet.length;
-    let letter;
-    if (idx < base) {
-        letter = alphabet[idx];
-    } else {
-        const first = Math.floor((idx - base) / base);
-        const second = (idx - base) % base;
-        letter = alphabet[first % base] + alphabet[second % base];
-    }
-    
-    // Persist the assignment
-    await redisStore.hSet('ip_letters', ip, letter);
-    return letter;
+    // Atomically claim next counter slot
+    const counter = await redisStore.incr('letter_counter');
+    const candidate = indexToLetter(counter - 1);
+    // HSETNX: atomic set-if-not-exists — prevents duplicate letters if two
+    // requests race between the hGet above and this hSet
+    await redisStore.hSetNX('ip_letters', ip, candidate);
+    return await redisStore.hGet('ip_letters', ip);
 }
 
 
@@ -503,96 +500,16 @@ app.get('/api/ice-servers', async (req, res) => {
     }
 });
 
-// Cross-domain profile sharing system
-app.post('/api/transfer-profile', async (req, res) => {
-    const { pseudo, color } = req.body;
-    if (!pseudo || !color) return res.status(400).json({ ok: false });
-    
-    // Generate temporary token for profile transfer
-    const token = crypto.randomBytes(8).toString('hex');
-    const profileData = {
-        pseudo: pseudo,
-        color: color,
-        timestamp: Date.now()
-    };
-    
-    try {
-        // Store with 5-minute expiration
-        await redisSet('transfer:' + token, profileData);
-        res.json({ 
-            ok: true, 
-            token: token
-        });
-    } catch (error) {
-        console.error('Error creating transfer token:', error);
-        res.status(500).json({ ok: false });
-    }
-});
-
-// Get shared profile for cross-domain access
-app.get('/api/get-shared-profile', async (req, res) => {
-    const realIp = req.headers['x-forwarded-for'] 
-        ? req.headers['x-forwarded-for'].split(',')[0].trim() 
-        : req.ip;
-    
-    try {
-        const sharedProfiles = await redisGet('sharedProfiles', {});
-        const profile = sharedProfiles[realIp];
-        
-        if (profile && Date.now() - profile.timestamp < 10 * 60 * 1000) { // 10 minutes
-            res.json({ ok: true, profile: { pseudo: profile.pseudo, color: profile.color } });
-        } else {
-            res.json({ ok: false });
-        }
-    } catch (error) {
-        console.error('Error getting shared profile:', error);
-        res.json({ ok: false });
-    }
-});
-
-// API to store room profiles from chatlet.com
-app.post('/api/store-room-profiles', async (req, res) => {
-    const { room, profiles } = req.body;
-    if (!room || !profiles || !Array.isArray(profiles) || profiles.length === 0) return res.json({ ok: false });
-
-    // Allow cross-origin from chatlet.com
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    try {
-        // Store all profiles for this room (keyed by room name)
-        // profiles[0] = la personne qui tourne le script, le reste = ses peers
-        const roomProfiles = await redisGet('roomProfiles', {});
-        roomProfiles[room] = {
-            profiles: profiles,
-            timestamp: Date.now()
-        };
-        await redisSet('roomProfiles', roomProfiles);
-
-        log(`[RoomProfiles] Stored ${profiles.length} profiles for room "${room}": ${profiles.map(p => p.pseudo).join(', ')}`);
-        res.json({ ok: true });
-    } catch (error) {
-        console.error('Error storing room profiles:', error);
-        res.json({ ok: false });
-    }
-});
-
-// API to get profile by UUID
+// API to get profile by UUID — searches all extras for a matching uuid field
 app.post('/api/get-profile-by-uuid', async (req, res) => {
     const { uuid } = req.body;
     if (!uuid) return res.json({ ok: false });
-    
     try {
-        const userProfile = await getIPExtras(uuid);
-        if (userProfile && (userProfile.url_pseudo || userProfile.url_color)) {
-            res.json({ 
-                ok: true, 
-                profile: { 
-                    pseudo: userProfile.url_pseudo, 
-                    color: userProfile.url_color 
-                } 
-            });
+        // UUID is stored as a field inside the IP's extras hash, not as the key itself
+        const all = await getAllExtras();
+        const entry = Object.values(all).find(e => e.uuid === uuid);
+        if (entry && (entry.url_pseudo || entry.url_color)) {
+            res.json({ ok: true, profile: { pseudo: entry.url_pseudo, color: entry.url_color } });
         } else {
             res.json({ ok: false });
         }
@@ -629,33 +546,6 @@ app.get('/api/get-user-profile', async (req, res) => {
         }
     } catch (error) {
         console.error('Error getting user profile:', error);
-        res.json({ ok: false });
-    }
-});
-
-// API to store IP -> Profile mappings discovered by the admin's script
-app.post('/api/store-ip-profiles', async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    const { mapping } = req.body; // Expecting { "1.2.3.4": { pseudo: "...", color: "..." } }
-    if (!mapping || typeof mapping !== 'object') return res.json({ ok: false });
-
-    try {
-        for (const ip in mapping) {
-            const profile = mapping[ip];
-            if (!profile.pseudo) continue;
-            
-            const extras = await getIPExtras(ip);
-            extras.url_pseudo = profile.pseudo;
-            extras.url_color = profile.color || extras.url_color;
-            await setIPExtras(ip, extras);
-        }
-        log(`[IPSync] Stored ${Object.keys(mapping).length} IP profiles`);
-        res.json({ ok: true });
-    } catch (error) {
-        console.error('Error storing IP profiles:', error);
         res.json({ ok: false });
     }
 });
@@ -825,19 +715,18 @@ app.get('/:room', async (req, res) => {
       return res.redirect('/' + room.toLowerCase());
   }
   
-  const realIp = req.headers['x-forwarded-for'] 
-      ? req.headers['x-forwarded-for'].split(',')[0].trim() 
+  const realIp = req.headers['x-forwarded-for']
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
       : req.ip;
-  
+
   try {
       const extras = await getIPExtras(realIp);
-      // Check if user has a stored profile from room detection
       if (extras.url_pseudo || extras.url_color) {
-          log(`[Profile] Applied stored profile for ${realIp}: ${extras.url_pseudo}`);
+          log(`[Profile] Stored profile found for ${realIp}: ${extras.url_pseudo}`);
       }
-      await setIPExtras(realIp, extras);
+      // Fix 4: read-only — no setIPExtras write needed here
   } catch (error) {
-      console.error('Error applying profile:', error);
+      console.error('Error reading profile:', error);
   }
   
   res.sendFile(path.join(__dirname, 'public', 'room.html'));
@@ -846,8 +735,9 @@ app.get('/:room', async (req, res) => {
 // Admin Routes - accessible with Tampermonkey script detection
 app.get('/admin/check-token', (req, res) => {
     const adminToken = req.headers['x-admin-token'] || req.query.admin_token;
-    const expectedToken = process.env.ADMIN_TOKEN || 'admin_access_2024';
-    res.json({ ok: adminToken === expectedToken });
+    const expectedToken = process.env.ADMIN_TOKEN;
+    if (!expectedToken) return res.json({ hasToken: false });
+    res.json({ hasToken: adminToken === expectedToken });
 });
 
 app.get('/admin/stats', (req, res) => {
@@ -943,14 +833,15 @@ app.post('/admin/api/delete-selected', async (req, res) => {
     try {
         const setIndices = new Set(indices.map(Number));
         if (redisStore) {
-            const lines = await redisStore.lRange('logs', 0, -1);
+            // Fix 1: use lRange(-5000,-1) — same window as redisGetLogs — so indices match
+            const lines = await redisStore.lRange('logs', -5000, -1);
             const kept = lines.filter((_, i) => !setIndices.has(i));
-            
+
             if (kept.length === 0 && lines.length > setIndices.size) {
                 log('[Admin] Delete aborted — would delete all logs unexpectedly');
                 return res.json({ ok: false, message: 'Opération annulée — vérifiez la sélection' });
             }
-            
+
             const pipeline = redisStore.multi();
             pipeline.del('logs');
             if (kept.length > 0) {
@@ -958,13 +849,13 @@ app.post('/admin/api/delete-selected', async (req, res) => {
                     pipeline.rPush('logs', ...kept.slice(i, i + 1000));
                 }
             }
-            pipeline.lTrim('logs', -5000, -1); // Keep last 5000 lines
             await pipeline.exec();
         } else {
             const data = await fsp.readFile(LOG_FILE, 'utf8');
             let lines = data.trim().split('\n');
-            lines = lines.filter((_, i) => !setIndices.has(i));
-            const newContent = lines.slice(-5000).join('\n') + (lines.length ? '\n' : '');
+            const tail = lines.slice(-5000); // same window
+            const kept = tail.filter((_, i) => !setIndices.has(i));
+            const newContent = kept.join('\n') + (kept.length ? '\n' : '');
             await fsp.writeFile(LOG_FILE, newContent, 'utf8');
         }
         res.json({ ok: true });
@@ -1044,32 +935,20 @@ io.on('connection', async (socket) => {
     
     try {
         const extras = await getIPExtras(realIp);
-        // Priority: if a profile was transferred (url_pseudo/color), apply it even if session exists
         if (extras.url_pseudo || extras.url_color) {
             const profile = socket.data.profile || {};
-            
-            // Force apply transferred data
-            if (extras.url_pseudo) profile.displayName = extras.url_pseudo;
-            if (extras.url_color) profile.profileColor = extras.url_color;
-            
+            if (extras.url_pseudo) profile.displayName  = extras.url_pseudo;
+            if (extras.url_color)  profile.profileColor = extras.url_color;
+
             socket.data.profile = profile;
             socket.emit('profile-update', profile);
-            
-            // Broadcast the forced identity
             socket.to(roomId).emit('profile-update', {
                 id: socket.id,
-                displayName: profile.displayName,
+                displayName:  profile.displayName,
                 profileColor: profile.profileColor
             });
-            
-            log(`[Socket] Applied TRANSFERRED profile for ${socket.id}: ${profile.displayName}`);
-            
-            // Optional: clear the transfer flags so they can change it later if they want
-            // But we keep it in current_pseudo/color for the admin stats
-            const updatedExtras = { ...extras };
-            delete updatedExtras.url_pseudo;
-            delete updatedExtras.url_color;
-            await setIPExtras(realIp, updatedExtras);
+            log(`[Socket] Applied profile for ${socket.id}: ${profile.displayName}`);
+            // Fix 5: keep url_pseudo/url_color in extras — needed for admin stats display
         }
     } catch (err) {
         log('Error applying URL profile:', err);

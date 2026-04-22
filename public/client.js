@@ -229,9 +229,18 @@ function showProfilePicker(profiles) {
     document.body.appendChild(overlay);
 }
 
-// Priority: URL params > room profiles > transferred profile > localStorage > random
-let myDisplayName = _urlPseudo || (groupProfiles && groupProfiles.length > 0 ? findMatchingProfile(groupProfiles) : null) || (transferredProfile ? transferredProfile.pseudo : null) || localStorage.getItem('displayName') || generateRandomName();
-let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null) || (groupProfiles && groupProfiles.length > 0 ? '#' + findMatchingProfile(groupProfiles).color : null) || (transferredProfile ? '#' + transferredProfile.color : null) || savedColor || pastelColors[Math.floor(Math.random() * pastelColors.length)];
+// Priority: URL params > transferred profile > localStorage > random
+const _matchedGroupProfile = (groupProfiles && groupProfiles.length > 0) ? findMatchingProfile(groupProfiles) : null;
+let myDisplayName  = _urlPseudo
+    || (_matchedGroupProfile ? _matchedGroupProfile.pseudo : null)
+    || (transferredProfile   ? transferredProfile.pseudo   : null)
+    || localStorage.getItem('displayName')
+    || generateRandomName();
+let myProfileColor = (_urlColor && /^#[0-9a-fA-F]{6}$/.test(_urlColor) ? _urlColor : null)
+    || (_matchedGroupProfile && _matchedGroupProfile.color ? '#' + _matchedGroupProfile.color : null)
+    || (transferredProfile && transferredProfile.color ? '#' + transferredProfile.color : null)
+    || savedColor
+    || pastelColors[Math.floor(Math.random() * pastelColors.length)];
 
 localStorage.setItem('displayName', myDisplayName);
 localStorage.setItem('profileColor', myProfileColor);
@@ -241,28 +250,29 @@ localStorage.setItem('profileColor', myProfileColor);
 
 // Apply UUID or Token profile in background (overrides if found)
 (async () => {
+    let applied = false;
     // 1. Try Token first (priority)
     const tokenProfile = await fetchProfileByToken();
     if (tokenProfile) {
-        myDisplayName = tokenProfile.pseudo;
+        myDisplayName  = tokenProfile.pseudo;
         myProfileColor = tokenProfile.color.startsWith('#') ? tokenProfile.color : '#' + tokenProfile.color;
+        applied = true;
     } else {
         // 2. Try UUID fallback
-        const uuidProfile = await fetchProfileByUUID();
+        const uuidProfile = await fetchProfileByUUID(); // Fix 6: declared in same scope
         if (uuidProfile) {
-            myDisplayName = uuidProfile.pseudo || myDisplayName;
-            myProfileColor = uuidProfile.color || myProfileColor;
+            myDisplayName  = uuidProfile.pseudo || myDisplayName;
+            myProfileColor = uuidProfile.color  || myProfileColor;
+            applied = true;
         }
     }
-    
-    if (tokenProfile || (typeof uuidProfile !== 'undefined' && uuidProfile)) {
-        localStorage.setItem('displayName', myDisplayName);
-        localStorage.setItem('profileColor', myProfileColor);
-        // Update UI if already rendered
+
+    if (applied) {
+        localStorage.setItem('displayName',   myDisplayName);
+        localStorage.setItem('profileColor',  myProfileColor);
         const nameInput = document.querySelector('.settings .input');
         if (nameInput) nameInput.value = myDisplayName;
         if (typeof updateLocalProfileUI === 'function') updateLocalProfileUI();
-        // If already in a room, announce change
         if (socket && socket.connected && roomId) {
             socket.emit('profile-update', { roomId, displayName: myDisplayName, profileColor: myProfileColor });
         }

@@ -447,19 +447,21 @@
 
         async function deleteSelected() {
             const selected = Array.from(document.querySelectorAll('.line-cb:checked')).map(cb => {
-                const logsIndices = JSON.parse(cb.dataset.indices);
-                return logsIndices;
+                return JSON.parse(cb.dataset.indices);
             }).flat();
-            
             if (selected.length === 0) return alert('Aucune ligne sélectionnée');
             const uniqueIps = new Set(Array.from(document.querySelectorAll('.line-cb:checked')).map(cb => cb.closest('tr').querySelector('.ip-cell').textContent.trim()));
             if (!confirm(`Supprimer ${uniqueIps.size} IP(s) — ${selected.length} ligne(s) de logs ?`)) return;
 
-            await fetch('/admin/api/delete-selected', {
+            const res = await fetch('/admin/api/delete-selected', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ token: sessionToken, indices: selected })
             });
+            const data = await res.json();
+            if (!data.ok) {
+                alert('❌ Erreur : ' + (data.message || 'Suppression annulée'));
+            }
             loadData();
         }
 
