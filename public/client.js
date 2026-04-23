@@ -745,18 +745,23 @@ function updateVideoVisibility(userId, isEnabled) {
 socket.on('user-connected', (userId) => {
     if (userId === socket.id) return;
 
-    // Nettoyer l'ancienne connexion si elle existe (même ID)
     if (peers[userId]) {
         peers[userId].close();
         delete peers[userId];
     }
-    // Nettoyer l'élément DOM de cet ID s'il existe
     const oldEl = document.getElementById('peer-' + userId);
     if (oldEl) oldEl.remove();
 
     if (allowSoundNotifications && audioUnconvinced) audioUnconvinced.play().catch(e => {});
     createPeerConnection(userId, true);
     updatePeerUI(userId, true);
+
+    // Fix D: re-announce our own profile to the room so the new joiner
+    // gets our name even if sync-profiles sent "Guest" for us (cross-node race)
+    if (myDisplayName && myProfileColor) {
+        socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
+    }
+
     if (isModerator) {
         setTimeout(() => {
             const el = document.getElementById(`peer-${userId}`);
@@ -1248,17 +1253,17 @@ socket.on('profile-update', (data) => {
 socket.on('sync-profiles', (profiles) => {
     for (const id in profiles) {
         if (id === socket.id || id === 'local') continue;
-        const prof = profiles[id] || { displayName: 'Guest', profileColor: '#4A90E2' };
+        const prof = profiles[id] || {};
         remoteProfiles[id] = {
-            displayName: prof.displayName || 'Guest',
+            displayName:  prof.displayName  || 'Guest',
             profileColor: sanitizeColor(prof.profileColor || '#4A90E2')
         };
-        // Créer l'élément DOM immédiatement avec le profil connu —
-        // la vidéo WebRTC s'attachera quand le signal arrivera.
-        // Si l'élément existe déjà, juste mettre à jour les infos.
         updatePeerUI(id, true);
     }
-    // Re-apply mod buttons
+    // Fix D: ask the room to re-broadcast profiles — handles the cross-node
+    // case where sync-profiles sent "Guest" because socket.data was unavailable
+    socket.emit('profile-update', { displayName: myDisplayName, profileColor: myProfileColor });
+
     setTimeout(() => {
         if (isModerator) {
             document.querySelectorAll('.peer.miniature').forEach(peer => addModButtons(peer));

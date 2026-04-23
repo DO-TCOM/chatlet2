@@ -914,10 +914,8 @@ io.on('connection', async (socket) => {
     roomId = roomId.replace(/[^a-z0-9\-_]/gi, '').toLowerCase();
     if (!roomId) return;
 
-    // Guard: if already in this room, don't re-announce
     if (socket.data.roomId === roomId) return;
 
-    // Leave previous room if any
     if (socket.data.roomId) {
         socket.leave(socket.data.roomId);
         socket.to(socket.data.roomId).emit('user-disconnected', socket.id);
@@ -926,32 +924,17 @@ io.on('connection', async (socket) => {
     socket.join(roomId);
     socket.data.roomId = roomId;
     log(`[Socket] User ${socket.id} joined room: ${roomId}`);
+
+    // Fix A: broadcast user-connected + profile in ONE shot BEFORE any await
+    // This way existing peers never create a "Guest" avatar — they get the real
+    // profile in the same tick, before their JS even processes user-connected.
     socket.to(roomId).emit('user-connected', socket.id);
-
-    // Check if user has URL-based profile and apply it
-    const realIp = socket.handshake.headers['x-forwarded-for']
-        ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
-        : socket.handshake.address;
-    
-    try {
-        const extras = await getIPExtras(realIp);
-        if (extras.url_pseudo || extras.url_color) {
-            const profile = socket.data.profile || {};
-            if (extras.url_pseudo) profile.displayName  = extras.url_pseudo;
-            if (extras.url_color)  profile.profileColor = extras.url_color;
-
-            socket.data.profile = profile;
-            socket.emit('profile-update', profile);
-            socket.to(roomId).emit('profile-update', {
-                id: socket.id,
-                displayName:  profile.displayName,
-                profileColor: profile.profileColor
-            });
-            log(`[Socket] Applied profile for ${socket.id}: ${profile.displayName}`);
-            // Fix 5: keep url_pseudo/url_color in extras — needed for admin stats display
-        }
-    } catch (err) {
-        log('Error applying URL profile:', err);
+    if (socket.data.profile) {
+        socket.to(roomId).emit('profile-update', {
+            id: socket.id,
+            displayName:  socket.data.profile.displayName,
+            profileColor: socket.data.profile.profileColor
+        });
     }
 
     // Notify new joiner of any existing mods in room
@@ -964,26 +947,49 @@ io.on('connection', async (socket) => {
         }
     } catch(e) {}
 
-    // FIX: broadcast profile to room immediately after joining
-    if (socket.data.profile) {
-        socket.to(roomId).emit('profile-update', {
-            id: socket.id,
-            displayName: socket.data.profile.displayName,
-            profileColor: socket.data.profile.profileColor
-        });
-    }
-
+    // Fix B: build sync-profiles from Redis hash (cross-node safe) instead of
+    // socket.data.profile which may be empty for sockets on other Render instances
     try {
         const sockets = await io.in(roomId).fetchSockets();
         const roomProfiles = {};
         for (const remoteSocket of sockets) {
             if (remoteSocket.id === socket.id) continue;
-            // Always include peer: with profile or default fallback
-            roomProfiles[remoteSocket.id] = remoteSocket.data.profile || { displayName: 'Guest', profileColor: '#4A90E2' };
+            // Try Redis first (always available cross-node), fall back to socket.data
+            let profile = remoteSocket.data.profile || null;
+            if (!profile && redisStore) {
+                try {
+                    const raw = await redisStore.hGet('socket_profiles', remoteSocket.id);
+                    if (raw) profile = JSON.parse(raw);
+                } catch(e) {}
+            }
+            roomProfiles[remoteSocket.id] = profile || { displayName: 'Guest', profileColor: '#4A90E2' };
         }
         socket.emit('sync-profiles', roomProfiles);
     } catch (err) {
         log('Error fetching sockets:', err);
+    }
+
+    // Apply URL-based profile from extras (background, non-blocking for room announce)
+    const realIp = socket.handshake.headers['x-forwarded-for']
+        ? socket.handshake.headers['x-forwarded-for'].split(',')[0].trim()
+        : socket.handshake.address;
+    try {
+        const extras = await getIPExtras(realIp);
+        if (extras.url_pseudo || extras.url_color) {
+            const profile = socket.data.profile || {};
+            if (extras.url_pseudo) profile.displayName  = extras.url_pseudo;
+            if (extras.url_color)  profile.profileColor = extras.url_color;
+            socket.data.profile = profile;
+            // Only emit to room — joining user already got their profile via profile-update before join-room
+            socket.to(roomId).emit('profile-update', {
+                id: socket.id,
+                displayName:  profile.displayName,
+                profileColor: profile.profileColor
+            });
+            log(`[Socket] Applied URL profile for ${socket.id}: ${profile.displayName}`);
+        }
+    } catch (err) {
+        log('Error applying URL profile:', err);
     }
   });
 
@@ -993,13 +999,17 @@ io.on('connection', async (socket) => {
     data.displayName = data.displayName.substring(0, 50);
     if (!/^#[0-9a-fA-F]{6}$/.test(data.profileColor)) return;
 
-    // FIX: Store profile even before join-room so sync-profiles has fresh data
     socket.data.profile = {
         displayName: data.displayName,
         profileColor: data.profileColor
     };
 
-    // Only relay to room if already joined
+    // Fix B: persist to Redis so other Render nodes can read it via fetchSockets
+    if (redisStore) {
+        redisStore.hSet('socket_profiles', socket.id,
+            JSON.stringify(socket.data.profile)).catch(() => {});
+    }
+
     const actualRoom = socket.data.roomId;
     if (!actualRoom) return;
 
@@ -1217,10 +1227,11 @@ io.on('connection', async (socket) => {
   socket.on('disconnect', (reason) => {
     const roomId = socket.data.roomId;
     if (roomId) {
-      // Notifier tous les membres de la room
       socket.to(roomId).emit('user-disconnected', socket.id);
       log(`[Socket] User ${socket.id} disconnected from room ${roomId} (${reason})`);
     }
+    // Fix B: clean up cross-node profile cache
+    if (redisStore) redisStore.hDel('socket_profiles', socket.id).catch(() => {});
   });
 });
 
